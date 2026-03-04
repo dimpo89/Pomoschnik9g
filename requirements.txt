@@ -1,4 +1,2 @@
 python-telegram-bot==13.15
-httpx==0.23.0
-httpcore==0.16.3
-certifi==2023.7.22
+
