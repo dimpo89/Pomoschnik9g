@@ -544,4 +544,426 @@ def button_handler(update: Update, context: CallbackContext):
             [InlineKeyboardButton("➕ Добавить админа", callback_data="admin_add")],
             [InlineKeyboardButton("❌ Удалить админа", callback_data="admin_remove")],
             [InlineKeyboardButton("🚫 Бан пользователя", callback_data="admin_ban")],
+                        [InlineKeyboardButton("✅ Разбан пользователя", callback_data="admin_unban")],
+            [InlineKeyboardButton("⭐ Выдать подписку", callback_data="admin_subscription")],
+            [InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")],
+            [InlineKeyboardButton("📞 Сообщения в поддержку", callback_data="admin_reports")],
+            [InlineKeyboardButton("👁️ Слежка", callback_data="admin_tracking")],
+            [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")],
+        ]
+        query.edit_message_text("👑 **Админ-панель**", parse_mode="Markdown", 
+                              reply_markup=InlineKeyboardMarkup(keyboard))
     
+    # Слежка
+    elif query.data == "admin_tracking" and is_admin(user_id):
+        enabled = is_tracking_enabled()
+        status = "✅ ВКЛЮЧЕНА" if enabled else "❌ ВЫКЛЮЧЕНА"
+        keyboard = [
+            [InlineKeyboardButton("✅ Включить" if not enabled else "❌ Выключить", 
+                                 callback_data="toggle_tracking")],
+            [InlineKeyboardButton("🔙 Назад", callback_data="admin_menu")],
+        ]
+        query.edit_message_text(
+            f"👁️ **Настройка слежки**\n\n"
+            f"Текущий статус: {status}\n\n"
+            f"Когда слежка включена, администраторы видят, кто отправил фото.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    
+    # Переключение слежки
+    elif query.data == "toggle_tracking" and is_admin(user_id):
+        enabled = is_tracking_enabled()
+        set_tracking(not enabled)
+        new_status = "✅ ВКЛЮЧЕНА" if not enabled else "❌ ВЫКЛЮЧЕНА"
+        query.edit_message_text(
+            f"👁️ Статус слежки изменен на: {new_status}",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Назад", callback_data="admin_tracking")
+            ]])
+        )
+    
+    # Статистика
+    elif query.data == "admin_stats" and is_admin(user_id):
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        
+        c.execute("SELECT COUNT(*) FROM photos")
+        photos = c.fetchone()[0]
+        
+        c.execute("SELECT COUNT(*) FROM users")
+        users = c.fetchone()[0]
+        
+        c.execute("SELECT COUNT(*) FROM users WHERE subscription_end > datetime('now')")
+        subs = c.fetchone()[0]
+        
+        c.execute("SELECT COUNT(*) FROM reports WHERE status='new'")
+        reports = c.fetchone()[0]
+        
+        c.execute("SELECT COUNT(*) FROM admins")
+        admins = c.fetchone()[0] + len(ADMIN_IDS)
+        
+        conn.close()
+        
+        text = (
+            f"📊 **Статистика бота:**\n\n"
+            f"👥 Всего пользователей: {users}\n"
+            f"⭐ Подписчиков: {subs}\n"
+            f"📸 Фотографий: {photos}\n"
+            f"👑 Администраторов: {admins}\n"
+            f"📞 Новых сообщений: {reports}"
+        )
+        
+        query.edit_message_text(text, parse_mode="Markdown",
+                              reply_markup=InlineKeyboardMarkup([[
+                                  InlineKeyboardButton("🔙 Назад", callback_data="admin_menu")
+                              ]]))
+    
+    # Сообщения в поддержку
+    elif query.data == "admin_reports" and is_admin(user_id):
+        reports = get_new_reports()
+        
+        if not reports:
+            query.edit_message_text(
+                "📞 Новых сообщений нет.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Назад", callback_data="admin_menu")
+                ]])
+            )
+            return
+        
+        text = "📞 **Новые сообщения:**\n\n"
+        for report in reports[:5]:  # Показываем первые 5
+            report_id, user_id, username, message, date = report
+            text += f"ID: {report_id}\nОт: @{username or 'Неизвестно'} (ID: {user_id})\nДата: {date}\nСообщение: {message}\n\n"
+            mark_report_read(report_id)
+        
+        text += "\n✅ Сообщения отмечены как прочитанные. Ответьте пользователю в личные сообщения."
+        
+        query.edit_message_text(text, parse_mode="Markdown",
+                              reply_markup=InlineKeyboardMarkup([[
+                                  InlineKeyboardButton("🔙 Назад", callback_data="admin_menu")
+                              ]]))
+    
+    # Разделы админ-панели, требующие ввода
+    elif query.data in ["admin_hw", "admin_solved_hw", "admin_add", "admin_remove", 
+                       "admin_ban", "admin_unban", "admin_subscription"] and is_admin(user_id):
+        
+        if query.data == "admin_hw":
+            query.edit_message_text(
+                "📝 Введите новое домашнее задание в формате:\n"
+                "`Предмет: Задание`\n\n"
+                "Пример: `Математика: Учебник стр. 45, № 123-125`",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Отмена", callback_data="admin_menu")
+                ]])
+            )
+            context.user_data['admin_action'] = 'hw'
+        
+        elif query.data == "admin_solved_hw":
+            query.edit_message_text(
+                "✅ Отправьте фото решенного домашнего задания и укажите предмет.\n\n"
+                "Сначала отправьте фото, а затем в сообщении напишите название предмета.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Отмена", callback_data="admin_menu")
+                ]])
+            )
+            context.user_data['admin_action'] = 'solved_hw_waiting_photo'
+        
+        elif query.data == "admin_add":
+            query.edit_message_text(
+                "➕ Отправьте ID нового администратора.\n\n"
+                "ID можно узнать у @userinfobot",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Отмена", callback_data="admin_menu")
+                ]])
+            )
+            context.user_data['admin_action'] = 'add_admin'
+        
+        elif query.data == "admin_remove":
+            query.edit_message_text(
+                "❌ Отправьте ID администратора, которого хотите удалить.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Отмена", callback_data="admin_menu")
+                ]])
+            )
+            context.user_data['admin_action'] = 'remove_admin'
+        
+        elif query.data == "admin_ban":
+            query.edit_message_text(
+                "🚫 Отправьте ID пользователя и время бана в часах.\n\n"
+                "Формат: `ID часы`\n"
+                "Пример: `123456789 24` - бан на 24 часа\n"
+                "Если часы не указать - бан навсегда\n"
+                "Пример: `123456789` - бан навсегда",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Отмена", callback_data="admin_menu")
+                ]])
+            )
+            context.user_data['admin_action'] = 'ban'
+        
+        elif query.data == "admin_unban":
+            query.edit_message_text(
+                "✅ Отправьте ID пользователя для разбана.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Отмена", callback_data="admin_menu")
+                ]])
+            )
+            context.user_data['admin_action'] = 'unban'
+        
+        elif query.data == "admin_subscription":
+            query.edit_message_text(
+                "⭐ Отправьте ID пользователя и количество дней подписки.\n\n"
+                "Формат: `ID дни`\n"
+                "Пример: `123456789 30` - подписка на 30 дней\n"
+                "Если дни не указать - подписка на 30 дней по умолчанию",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Отмена", callback_data="admin_menu")
+                ]])
+            )
+            context.user_data['admin_action'] = 'subscription'
+
+# ================== ОБРАБОТЧИКИ СООБЩЕНИЙ ==================
+@not_banned
+def handle_photo(update: Update, context: CallbackContext):
+    user = update.effective_user
+    photo = update.message.photo[-1]
+    
+    # Проверяем, не ждем ли мы фото для решенного ДЗ
+    if context.user_data.get('admin_action') == 'solved_hw_waiting_photo' and is_admin(user.id):
+        context.user_data['solved_hw_photo'] = photo.file_id
+        context.user_data['admin_action'] = 'solved_hw_waiting_subject'
+        update.message.reply_text(
+            "✅ Фото получено! Теперь напишите название предмета.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Отмена", callback_data="admin_menu")
+            ]])
+        )
+        return
+    
+    # Обычное добавление фото
+    add_photo(photo.file_id, user.id, user.username or user.first_name)
+    count = get_photos_count()
+    
+    # Если слежка включена, уведомляем админов
+    if is_tracking_enabled():
+        for admin_id in ADMIN_IDS:
+            try:
+                context.bot.send_message(
+                    chat_id=admin_id,
+                    text=f"📸 Новое фото от @{user.username or user.first_name} (ID: {user.id})"
+                )
+            except:
+                pass
+    
+    update.message.reply_text(
+        f"✅ Фото добавлено в галерею!\nВсего фотографий: {count}\n\n"
+        f"Чтобы посмотреть случайное фото, нажми /random",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")
+        ]])
+    )
+
+@not_banned
+def handle_text(update: Update, context: CallbackContext):
+    user = update.effective_user
+    text = update.message.text
+    
+    # Обработка сообщений в поддержку
+    if context.user_data.get('waiting_for_support'):
+        report_id = add_report(user.id, user.username or user.first_name, text)
+        update.message.reply_text(
+            "✅ Ваше сообщение отправлено администратору! Мы ответим как можно скорее.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")
+            ]])
+        )
+        context.user_data['waiting_for_support'] = False
+        
+        # Уведомляем админов
+        for admin_id in ADMIN_IDS:
+            try:
+                context.bot.send_message(
+                    chat_id=admin_id,
+                    text=f"📞 Новое сообщение в поддержку от @{user.username or user.first_name} (ID: {user.id})\n\n{text}"
+                )
+            except:
+                pass
+        return
+    
+    # Админ-действия
+    if is_admin(user.id):
+        action = context.user_data.get('admin_action')
+        
+        if action == 'hw':
+            if ':' in text:
+                subject, task = text.split(':', 1)
+                set_homework(subject.strip(), task.strip())
+                update.message.reply_text(
+                    "✅ Домашнее задание обновлено!",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")
+                    ]])
+                )
+                context.user_data['admin_action'] = None
+            else:
+                update.message.reply_text("❌ Неверный формат. Используйте: `Предмет: Задание`", parse_mode="Markdown")
+        
+        elif action == 'solved_hw_waiting_subject':
+            if context.user_data.get('solved_hw_photo'):
+                add_solved_homework(text.strip(), context.user_data['solved_hw_photo'])
+                update.message.reply_text(
+                    "✅ Решенное домашнее задание добавлено!",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")
+                    ]])
+                )
+                context.user_data['admin_action'] = None
+                context.user_data.pop('solved_hw_photo', None)
+            else:
+                update.message.reply_text("❌ Ошибка: фото не найдено")
+        
+        elif action == 'add_admin':
+            try:
+                admin_id = int(text.strip())
+                try:
+                    chat = context.bot.get_chat(admin_id)
+                    username = chat.username or chat.first_name
+                except:
+                    username = "Unknown"
+                
+                add_admin(admin_id, username, user.id)
+                update.message.reply_text(
+                    f"✅ Пользователь {username} (ID: {admin_id}) теперь администратор!",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")
+                    ]])
+                )
+                context.user_data['admin_action'] = None
+                
+                try:
+                    context.bot.send_message(
+                        chat_id=admin_id,
+                        text="🎉 Вас назначили администратором бота 'Помощник 9Г'!"
+                    )
+                except:
+                    pass
+            except ValueError:
+                update.message.reply_text("❌ Введите числовой ID")
+        
+        elif action == 'remove_admin':
+            try:
+                admin_id = int(text.strip())
+                if admin_id in ADMIN_IDS:
+                    update.message.reply_text("❌ Нельзя удалить главного администратора")
+                else:
+                    remove_admin(admin_id)
+                    update.message.reply_text(
+                        f"✅ Администратор {admin_id} удален",
+                        reply_markup=InlineKeyboardMarkup([[
+                            InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")
+                        ]])
+                    )
+                    context.user_data['admin_action'] = None
+            except ValueError:
+                update.message.reply_text("❌ Введите числовой ID")
+        
+        elif action == 'ban':
+            parts = text.strip().split()
+            try:
+                user_id = int(parts[0])
+                hours = int(parts[1]) if len(parts) > 1 else None
+                
+                if hours:
+                    ban_user(user_id, hours)
+                    update.message.reply_text(f"✅ Пользователь {user_id} забанен на {hours} часов")
+                else:
+                    ban_user(user_id)
+                    update.message.reply_text(f"✅ Пользователь {user_id} забанен навсегда")
+                
+                context.user_data['admin_action'] = None
+            except:
+                update.message.reply_text("❌ Неверный формат. Используйте: `ID часы` или просто `ID`")
+        
+        elif action == 'unban':
+            try:
+                user_id = int(text.strip())
+                unban_user(user_id)
+                update.message.reply_text(
+                    f"✅ Пользователь {user_id} разбанен",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")
+                    ]])
+                )
+                context.user_data['admin_action'] = None
+            except ValueError:
+                update.message.reply_text("❌ Введите числовой ID")
+        
+        elif action == 'subscription':
+            parts = text.strip().split()
+            try:
+                user_id = int(parts[0])
+                days = int(parts[1]) if len(parts) > 1 else 30
+                
+                give_subscription(user_id, days)
+                update.message.reply_text(
+                    f"✅ Пользователю {user_id} выдана подписка на {days} дней",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")
+                    ]])
+                )
+                context.user_data['admin_action'] = None
+                
+                try:
+                    context.bot.send_message(
+                        chat_id=user_id,
+                        text=f"⭐ Вам выдана подписка на {days} дней! Используйте /start для доступа к функциям."
+                    )
+                except:
+                    pass
+            except:
+                update.message.reply_text("❌ Неверный формат. Используйте: `ID дни`")
+
+# ================== ОБРАБОТЧИК ЗВЁЗД ==================
+def handle_stars(update: Update, context: CallbackContext):
+    """Обработчик оплаты звёздами"""
+    user = update.effective_user
+    
+    if update.message.successful_payment:
+        # Подтверждение оплаты
+        give_subscription(user.id, 30)  # 30 дней подписки
+        update.message.reply_text(
+            "⭐ Спасибо за покупку! Подписка активирована на 30 дней.\n"
+            "Теперь вам доступно решенное домашнее задание!",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Решенное ДЗ", callback_data="menu_solved_hw"),
+                InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")
+            ]])
+        )
+
+# ================== ЗАПУСК БОТА ==================
+def main():
+    # Инициализация БД
+    init_db()
+    
+    # Создаем updater
+    updater = Updater(TOKEN, use_context=True)
+    dp = updater.dispatcher
+    
+    # Регистрируем обработчики
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(CallbackQueryHandler(button_handler))
+    dp.add_handler(MessageHandler(Filters.photo, handle_photo))
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))
+    dp.add_handler(MessageHandler(Filters.successful_payment, handle_stars))
+    
+    print("🚀 Бот 'Помощник 9Г' запущен...")
+    print(f"👑 Главный администратор ID: {ADMIN_IDS[0]}")
+    
+    # Запускаем бота
+    updater.start_polling()
+    updater.idle()
+
+if __name__ == "__main__":
+    main()
+```
