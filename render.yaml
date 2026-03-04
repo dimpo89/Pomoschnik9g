@@ -1,0 +1,8 @@
+services:
+  - type: web
+    name: pomoshchnik-9g-bot
+    runtime: docker
+    repo: https://github.com/ВАШ_АККАУНТ/pomoshchnik-9g
+    plan: free
+    region: frankfurt
+    dockerfilePath: ./Dockerfile
