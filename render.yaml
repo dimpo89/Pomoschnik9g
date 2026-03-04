@@ -1,0 +1,7 @@
+services:
+  - type: web
+    name: pomoshchnik-9g
+    runtime: python
+    buildCommand: pip install --upgrade pip && pip install -r requirements.txt
+    startCommand: python bot.py
+    plan: free
