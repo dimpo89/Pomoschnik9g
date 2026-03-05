@@ -4,6 +4,7 @@ import sqlite3
 from datetime import datetime, timedelta
 from functools import wraps
 import time
+import asyncio
 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import Updater, CommandHandler, MessageHandler, CallbackQueryHandler, Filters, CallbackContext
@@ -38,8 +39,9 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS solved_homework
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   subject TEXT,
-                  photo_id TEXT,
-                  date TEXT)''')
+                  photo_ids TEXT,  -- Храним несколько фото через запятую
+                  date TEXT,
+                  expires_at TEXT)''')  -- Дата истечения
     
     # Таблица с фотографиями
     c.execute('''CREATE TABLE IF NOT EXISTS photos
@@ -80,6 +82,14 @@ def init_db():
                   message TEXT,
                   date TEXT,
                   status TEXT DEFAULT 'new')''')
+    
+    # Таблица для рассылок
+    c.execute('''CREATE TABLE IF NOT EXISTS broadcasts
+                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
+                  admin_id INTEGER,
+                  message TEXT,
+                  date TEXT,
+                  status TEXT DEFAULT 'pending')''')
     
     conn.commit()
     conn.close()
@@ -142,6 +152,15 @@ def register_user(user_id, username, first_name):
                   (user_id, username, first_name, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
     conn.commit()
     conn.close()
+
+# Получить всех пользователей
+def get_all_users():
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT user_id FROM users")
+    users = [row[0] for row in c.fetchall()]
+    conn.close()
+    return users
 
 # Проверка бана
 def is_banned(user_id):
@@ -269,12 +288,20 @@ def get_homework():
     conn.close()
     return result
 
-# Добавить решенное ДЗ
-def add_solved_homework(subject, photo_id):
+# Добавить решенное ДЗ (несколько фото)
+def add_solved_homework(subject, photo_ids):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("INSERT INTO solved_homework (subject, photo_id, date) VALUES (?, ?, ?)",
-              (subject, photo_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    
+    # Удаляем старые записи (если нужно хранить только последнюю)
+    c.execute("DELETE FROM solved_homework")
+    
+    # Сохраняем новые фото (как строку с ID через запятую)
+    photo_ids_str = ','.join(photo_ids)
+    expires_at = (datetime.now() + timedelta(days=1)).strftime("%Y-%m-%d %H:%M:%S")
+    
+    c.execute("INSERT INTO solved_homework (subject, photo_ids, date, expires_at) VALUES (?, ?, ?, ?)",
+              (subject, photo_ids_str, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), expires_at))
     conn.commit()
     conn.close()
 
@@ -282,10 +309,19 @@ def add_solved_homework(subject, photo_id):
 def get_solved_homework():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT subject, photo_id FROM solved_homework ORDER BY id DESC LIMIT 1")
+    
+    # Удаляем просроченные
+    c.execute("DELETE FROM solved_homework WHERE expires_at < datetime('now')")
+    
+    c.execute("SELECT subject, photo_ids FROM solved_homework ORDER BY id DESC LIMIT 1")
     result = c.fetchone()
     conn.close()
-    return result
+    
+    if result:
+        subject, photo_ids_str = result
+        photo_ids = photo_ids_str.split(',') if photo_ids_str else []
+        return subject, photo_ids
+    return None, []
 
 # Добавить сообщение в поддержку
 def add_report(user_id, username, message):
@@ -315,6 +351,17 @@ def mark_report_read(report_id):
     conn.commit()
     conn.close()
 
+# Сохранить рассылку
+def save_broadcast(admin_id, message):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("INSERT INTO broadcasts (admin_id, message, date) VALUES (?, ?, ?)",
+              (admin_id, message, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    broadcast_id = c.lastrowid
+    conn.commit()
+    conn.close()
+    return broadcast_id
+
 # ================== ДЕКОРАТОРЫ ==================
 def admin_required(func):
     @wraps(func)
@@ -336,12 +383,9 @@ def not_banned(func):
         return func(update, context, *args, **kwargs)
     return wrapper
 
-# ================== ОСНОВНЫЕ ФУНКЦИИ ==================
-def start(update: Update, context: CallbackContext):
-    user = update.effective_user
-    register_user(user.id, user.username, user.first_name)
-    
-    # Главное меню
+# ================== ФУНКЦИЯ ДЛЯ ВОЗВРАТА В МЕНЮ ==================
+def get_main_menu_keyboard(user_id):
+    """Создает клавиатуру главного меню"""
     keyboard = [
         [InlineKeyboardButton("📚 Домашнее задание", callback_data="menu_hw")],
         [InlineKeyboardButton("📸 Отправить фото", callback_data="menu_photo")],
@@ -350,17 +394,22 @@ def start(update: Update, context: CallbackContext):
         [InlineKeyboardButton("📞 Связаться с админом", callback_data="menu_support")],
     ]
     
-    if is_admin(user.id):
+    if is_admin(user_id):
         keyboard.append([InlineKeyboardButton("👑 Админ-панель", callback_data="admin_menu")])
     
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    return InlineKeyboardMarkup(keyboard)
+
+# ================== ОСНОВНЫЕ ФУНКЦИИ ==================
+def start(update: Update, context: CallbackContext):
+    user = update.effective_user
+    register_user(user.id, user.username, user.first_name)
     
     welcome_text = (
         f"👋 Привет, {user.first_name}!\n\n"
         "Я бот-помощник 9Г класса. Выбери действие:"
     )
     
-    update.message.reply_text(welcome_text, reply_markup=reply_markup)
+    update.message.reply_text(welcome_text, reply_markup=get_main_menu_keyboard(user.id))
 
 def button_handler(update: Update, context: CallbackContext):
     query = update.callback_query
@@ -373,27 +422,18 @@ def button_handler(update: Update, context: CallbackContext):
     
     # Главное меню
     if query.data == "main_menu":
-        keyboard = [
-            [InlineKeyboardButton("📚 Домашнее задание", callback_data="menu_hw")],
-            [InlineKeyboardButton("📸 Отправить фото", callback_data="menu_photo")],
-            [InlineKeyboardButton("🎲 Случайное фото", callback_data="menu_random")],
-            [InlineKeyboardButton("⭐ Подписка", callback_data="menu_subscription")],
-            [InlineKeyboardButton("📞 Связаться с админом", callback_data="menu_support")],
-        ]
-        if is_admin(user_id):
-            keyboard.append([InlineKeyboardButton("👑 Админ-панель", callback_data="admin_menu")])
-        
-        query.edit_message_text("🏠 Главное меню:", reply_markup=InlineKeyboardMarkup(keyboard))
+        query.edit_message_text("🏠 Главное меню:", reply_markup=get_main_menu_keyboard(user_id))
     
     # Домашнее задание
     elif query.data == "menu_hw":
         hw = get_homework()
-        keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]]
         
         if hw:
             text = f"📚 **Домашнее задание:**\n\n**Предмет:** {hw[0]}\n**Задание:** {hw[1]}"
         else:
             text = "📚 Домашнее задание пока не добавлено."
+        
+        keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]]
         
         # Если есть подписка, показываем кнопку с решенным ДЗ
         if has_subscription(user_id):
@@ -404,33 +444,42 @@ def button_handler(update: Update, context: CallbackContext):
     # Решенное ДЗ (для подписчиков)
     elif query.data == "menu_solved_hw":
         if not has_subscription(user_id):
+            keyboard = [
+                [InlineKeyboardButton("⭐ Купить подписку", callback_data="menu_subscription")],
+                [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
+            ]
             query.edit_message_text(
                 "❌ У вас нет подписки!\n\n"
                 "Купите подписку за 50 ⭐ или попросите администратора выдать её.",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("⭐ Купить подписку", callback_data="menu_subscription"),
-                    InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
-                ]])
+                reply_markup=InlineKeyboardMarkup(keyboard)
             )
             return
         
-        solved = get_solved_homework()
-        if solved and solved[1]:
-            subject, photo_id = solved
-            query.message.reply_photo(
-                photo=photo_id,
-                caption=f"✅ Решенное домашнее задание\nПредмет: {subject}",
+        subject, photo_ids = get_solved_homework()
+        if photo_ids:
+            query.edit_message_text(f"✅ Решенное домашнее задание\nПредмет: {subject}\n\nЗагружаю фото...")
+            
+            # Отправляем все фото
+            for i, photo_id in enumerate(photo_ids, 1):
+                caption = f"✅ Решенное ДЗ - {subject} (фото {i}/{len(photo_ids)})" if len(photo_ids) > 1 else f"✅ Решенное ДЗ - {subject}"
+                query.message.reply_photo(
+                    photo=photo_id,
+                    caption=caption
+                )
+            
+            # Отправляем кнопку возврата
+            query.message.reply_text(
+                "Выберите действие:",
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
                 ]])
             )
             query.message.delete()
         else:
+            keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]]
             query.edit_message_text(
                 "📝 Решенное домашнее задание пока не добавлено.",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
-                ]])
+                reply_markup=InlineKeyboardMarkup(keyboard)
             )
     
     # Отправить фото
@@ -493,7 +542,10 @@ def button_handler(update: Update, context: CallbackContext):
                 f"Доступно:\n"
                 f"✅ Решенное домашнее задание"
             )
-            keyboard = [[InlineKeyboardButton("✅ Решенное ДЗ", callback_data="menu_solved_hw")]]
+            keyboard = [
+                [InlineKeyboardButton("✅ Решенное ДЗ", callback_data="menu_solved_hw")],
+                [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
+            ]
         else:
             text = (
                 f"⭐ **Подписка за {STAR_PRICE} звёзд**\n\n"
@@ -505,9 +557,26 @@ def button_handler(update: Update, context: CallbackContext):
                 f"2. Подтвердите платеж\n"
                 f"3. Получите доступ!"
             )
-            keyboard = [[InlineKeyboardButton(f"⭐ Оплатить {STAR_PRICE} звёзд", callback_data="pay_subscription")]]
+            keyboard = [
+                [InlineKeyboardButton(f"⭐ Оплатить {STAR_PRICE} звёзд", callback_data="pay_subscription")],
+                [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
+            ]
+        else:
+            text = (
+                f"⭐ **Подписка за {STAR_PRICE} звёзд**\n\n"
+                f"Что дает подписка:\n"
+                f"✅ Доступ к решенному домашнему заданию\n"
+                f"✅ Приоритетная поддержка\n\n"
+                f"Как оплатить:\n"
+                f"1. Нажмите кнопку 'Оплатить звёздами'\n"
+                f"2. Подтвердите платеж\n"
+                f"3. Получите доступ!"
+            )
+            keyboard = [
+                [InlineKeyboardButton(f"⭐ Оплатить {STAR_PRICE} звёзд", callback_data="pay_subscription")],
+                [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
+            ]
         
-        keyboard.append([InlineKeyboardButton("🔙 Назад", callback_data="main_menu")])
         query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
     
     # Оплата подписки
@@ -544,8 +613,9 @@ def button_handler(update: Update, context: CallbackContext):
             [InlineKeyboardButton("➕ Добавить админа", callback_data="admin_add")],
             [InlineKeyboardButton("❌ Удалить админа", callback_data="admin_remove")],
             [InlineKeyboardButton("🚫 Бан пользователя", callback_data="admin_ban")],
-                        [InlineKeyboardButton("✅ Разбан пользователя", callback_data="admin_unban")],
+            [InlineKeyboardButton("✅ Разбан пользователя", callback_data="admin_unban")],
             [InlineKeyboardButton("⭐ Выдать подписку", callback_data="admin_subscription")],
+            [InlineKeyboardButton("📢 Рассылка", callback_data="admin_broadcast")],
             [InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")],
             [InlineKeyboardButton("📞 Сообщения в поддержку", callback_data="admin_reports")],
             [InlineKeyboardButton("👁️ Слежка", callback_data="admin_tracking")],
@@ -559,8 +629,7 @@ def button_handler(update: Update, context: CallbackContext):
         enabled = is_tracking_enabled()
         status = "✅ ВКЛЮЧЕНА" if enabled else "❌ ВЫКЛЮЧЕНА"
         keyboard = [
-            [InlineKeyboardButton("✅ Включить" if not enabled else "❌ Выключить", 
-                                 callback_data="toggle_tracking")],
+            [InlineKeyboardButton("✅ Включить" if not enabled else "❌ Выключить", callback_data="toggle_tracking")],
             [InlineKeyboardButton("🔙 Назад", callback_data="admin_menu")],
         ]
         query.edit_message_text(
@@ -645,6 +714,18 @@ def button_handler(update: Update, context: CallbackContext):
                                   InlineKeyboardButton("🔙 Назад", callback_data="admin_menu")
                               ]]))
     
+    # Рассылка
+    elif query.data == "admin_broadcast" and is_admin(user_id):
+        query.edit_message_text(
+            "📢 Введите сообщение для рассылки всем пользователям.\n\n"
+            "Поддерживается обычный текст, эмодзи и Markdown разметка.\n\n"
+            "Пример: *Важное объявление* для всех!",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Отмена", callback_data="admin_menu")
+            ]])
+        )
+        context.user_data['admin_action'] = 'broadcast'
+    
     # Разделы админ-панели, требующие ввода
     elif query.data in ["admin_hw", "admin_solved_hw", "admin_add", "admin_remove", 
                        "admin_ban", "admin_unban", "admin_subscription"] and is_admin(user_id):
@@ -662,13 +743,16 @@ def button_handler(update: Update, context: CallbackContext):
         
         elif query.data == "admin_solved_hw":
             query.edit_message_text(
-                "✅ Отправьте фото решенного домашнего задания и укажите предмет.\n\n"
-                "Сначала отправьте фото, а затем в сообщении напишите название предмета.",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🔙 Отмена", callback_data="admin_menu")
-                ]])
+                "✅ Отправьте **несколько фото** решенного домашнего задания.\n\n"
+                "После отправки всех фото нажмите кнопку 'Готово', чтобы указать предмет.\n\n"
+                "📸 Отправляйте фото по одному.",
+                reply_markup=InlineKeyboardMarkup([
+                    [InlineKeyboardButton("✅ Готово (закончить)", callback_data="solved_hw_done")],
+                    [InlineKeyboardButton("🔙 Отмена", callback_data="admin_menu")]
+                ])
             )
-            context.user_data['admin_action'] = 'solved_hw_waiting_photo'
+            context.user_data['admin_action'] = 'solved_hw_waiting_photos'
+            context.user_data['solved_hw_photos'] = []  # Список для хранения фото
         
         elif query.data == "admin_add":
             query.edit_message_text(
@@ -722,6 +806,24 @@ def button_handler(update: Update, context: CallbackContext):
                 ]])
             )
             context.user_data['admin_action'] = 'subscription'
+    
+    # Завершение добавления фото для решенного ДЗ
+    elif query.data == "solved_hw_done" and is_admin(user_id):
+        if context.user_data.get('solved_hw_photos'):
+            query.edit_message_text(
+                "📝 Напишите название предмета для этих фото:",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Отмена", callback_data="admin_menu")
+                ]])
+            )
+            context.user_data['admin_action'] = 'solved_hw_waiting_subject'
+        else:
+            query.edit_message_text(
+                "❌ Вы не отправили ни одного фото.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Назад", callback_data="admin_solved_hw")
+                ]])
+            )
 
 # ================== ОБРАБОТЧИКИ СООБЩЕНИЙ ==================
 @not_banned
@@ -730,14 +832,21 @@ def handle_photo(update: Update, context: CallbackContext):
     photo = update.message.photo[-1]
     
     # Проверяем, не ждем ли мы фото для решенного ДЗ
-    if context.user_data.get('admin_action') == 'solved_hw_waiting_photo' and is_admin(user.id):
-        context.user_data['solved_hw_photo'] = photo.file_id
-        context.user_data['admin_action'] = 'solved_hw_waiting_subject'
+    if context.user_data.get('admin_action') == 'solved_hw_waiting_photos' and is_admin(user.id):
+        # Добавляем фото в список
+        if 'solved_hw_photos' not in context.user_data:
+            context.user_data['solved_hw_photos'] = []
+        
+        context.user_data['solved_hw_photos'].append(photo.file_id)
+        
+        count = len(context.user_data['solved_hw_photos'])
         update.message.reply_text(
-            "✅ Фото получено! Теперь напишите название предмета.",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔙 Отмена", callback_data="admin_menu")
-            ]])
+            f"✅ Фото {count} добавлено!\n"
+            f"Отправьте еще фото или нажмите кнопку 'Готово'.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Готово (закончить)", callback_data="solved_hw_done")],
+                [InlineKeyboardButton("🔙 Отмена", callback_data="admin_menu")]
+            ])
         )
         return
     
@@ -757,8 +866,7 @@ def handle_photo(update: Update, context: CallbackContext):
                 pass
     
     update.message.reply_text(
-        f"✅ Фото добавлено в галерею!\nВсего фотографий: {count}\n\n"
-        f"Чтобы посмотреть случайное фото, нажми /random",
+        f"✅ Фото добавлено в галерею!\nВсего фотографий: {count}",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")
         ]])
@@ -810,18 +918,18 @@ def handle_text(update: Update, context: CallbackContext):
                 update.message.reply_text("❌ Неверный формат. Используйте: `Предмет: Задание`", parse_mode="Markdown")
         
         elif action == 'solved_hw_waiting_subject':
-            if context.user_data.get('solved_hw_photo'):
-                add_solved_homework(text.strip(), context.user_data['solved_hw_photo'])
+            if context.user_data.get('solved_hw_photos'):
+                add_solved_homework(text.strip(), context.user_data['solved_hw_photos'])
                 update.message.reply_text(
-                    "✅ Решенное домашнее задание добавлено!",
+                    "✅ Решенное домашнее задание добавлено! Оно будет доступно подписчикам в течение 24 часов.",
                     reply_markup=InlineKeyboardMarkup([[
                         InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")
                     ]])
                 )
                 context.user_data['admin_action'] = None
-                context.user_data.pop('solved_hw_photo', None)
+                context.user_data.pop('solved_hw_photos', None)
             else:
-                update.message.reply_text("❌ Ошибка: фото не найдено")
+                update.message.reply_text("❌ Ошибка: фото не найдены")
         
         elif action == 'add_admin':
             try:
@@ -876,10 +984,20 @@ def handle_text(update: Update, context: CallbackContext):
                 
                 if hours:
                     ban_user(user_id, hours)
-                    update.message.reply_text(f"✅ Пользователь {user_id} забанен на {hours} часов")
+                    update.message.reply_text(
+                        f"✅ Пользователь {user_id} забанен на {hours} часов",
+                        reply_markup=InlineKeyboardMarkup([[
+                            InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")
+                        ]])
+                    )
                 else:
                     ban_user(user_id)
-                    update.message.reply_text(f"✅ Пользователь {user_id} забанен навсегда")
+                    update.message.reply_text(
+                        f"✅ Пользователь {user_id} забанен навсегда",
+                        reply_markup=InlineKeyboardMarkup([[
+                            InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")
+                        ]])
+                    )
                 
                 context.user_data['admin_action'] = None
             except:
@@ -897,72 +1015,4 @@ def handle_text(update: Update, context: CallbackContext):
                 )
                 context.user_data['admin_action'] = None
             except ValueError:
-                update.message.reply_text("❌ Введите числовой ID")
-        
-        elif action == 'subscription':
-            parts = text.strip().split()
-            try:
-                user_id = int(parts[0])
-                days = int(parts[1]) if len(parts) > 1 else 30
-                
-                give_subscription(user_id, days)
-                update.message.reply_text(
-                    f"✅ Пользователю {user_id} выдана подписка на {days} дней",
-                    reply_markup=InlineKeyboardMarkup([[
-                        InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")
-                    ]])
-                )
-                context.user_data['admin_action'] = None
-                
-                try:
-                    context.bot.send_message(
-                        chat_id=user_id,
-                        text=f"⭐ Вам выдана подписка на {days} дней! Используйте /start для доступа к функциям."
-                    )
-                except:
-                    pass
-            except:
-                update.message.reply_text("❌ Неверный формат. Используйте: `ID дни`")
-
-# ================== ОБРАБОТЧИК ЗВЁЗД ==================
-def handle_stars(update: Update, context: CallbackContext):
-    """Обработчик оплаты звёздами"""
-    user = update.effective_user
-    
-    if update.message.successful_payment:
-        # Подтверждение оплаты
-        give_subscription(user.id, 30)  # 30 дней подписки
-        update.message.reply_text(
-            "⭐ Спасибо за покупку! Подписка активирована на 30 дней.\n"
-            "Теперь вам доступно решенное домашнее задание!",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("✅ Решенное ДЗ", callback_data="menu_solved_hw"),
-                InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")
-            ]])
-        )
-
-# ================== ЗАПУСК БОТА ==================
-def main():
-    # Инициализация БД
-    init_db()
-    
-    # Создаем updater
-    updater = Updater(TOKEN, use_context=True)
-    dp = updater.dispatcher
-    
-    # Регистрируем обработчики
-    dp.add_handler(CommandHandler("start", start))
-    dp.add_handler(CallbackQueryHandler(button_handler))
-    dp.add_handler(MessageHandler(Filters.photo, handle_photo))
-    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))
-    dp.add_handler(MessageHandler(Filters.successful_payment, handle_stars))
-    
-    print("🚀 Бот 'Помощник 9Г' запущен...")
-    print(f"👑 Главный администратор ID: {ADMIN_IDS[0]}")
-    
-    # Запускаем бота
-    updater.start_polling()
-    updater.idle()
-
-if __name__ == "__main__":
-    main()
+              
