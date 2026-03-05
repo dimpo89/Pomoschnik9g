@@ -738,52 +738,51 @@ def button_handler(update: Update, context: CallbackContext):
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
         return
-    
-    # Отправить фото
-    elif query.data == "menu_photo":
-        query.edit_message_text(
-            "📸 Отправьте мне фото, и оно будет отправлено на модерацию.\n\n"
-            "После проверки администратором фото появится в галерее.",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
-            ]])
-        )
-        return
-    
-# Случайное фото
-elif query.data == "menu_random":
-    photo_id = get_random_photo()
-    if photo_id:
-        count = get_photos_count()
-        caption = f"🎲 Случайное фото из галереи\nВсего фотографий: {count}"
+        # Отправить фото
+        elif query.data == "menu_photo":
+             query.edit_message_text(
+                "📸 Отправьте мне фото, и оно будет отправлено на модерацию.\n\n"
+                "После проверки администратором фото появится в галерее.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
+                ]])
+            )
+            return
+
+        # Случайное фото
+        elif query.data == "menu_random":
+            photo_id = get_random_photo()
+            if photo_id:
+                count = get_photos_count()
+                caption = f"🎲 Случайное фото из галереи\nВсего фотографий: {count}"
         
-        if is_tracking_enabled() and is_admin(user_id):
-            conn = sqlite3.connect(DB_PATH)
-            c = conn.cursor()
-            c.execute("SELECT username, user_id, date FROM photos WHERE file_id = ?", (photo_id,))
-            photo_info = c.fetchone()
-            conn.close()
+                if is_tracking_enabled() and is_admin(user_id):
+                    conn = sqlite3.connect(DB_PATH)
+                    c = conn.cursor()
+                    c.execute("SELECT username, user_id, date FROM photos WHERE file_id = ?", (photo_id,))
+                    photo_info = c.fetchone()
+                    conn.close()
             
-            if photo_info:
-                username, photo_user_id, date = photo_info
-                caption += f"\n\n👤 Отправил: @{username or 'Неизвестно'} (ID: {photo_user_id})\n📅 Дата: {date}"
+                    if photo_info:
+                        username, photo_user_id, date = photo_info
+                        caption += f"\n\n👤 Отправил: @{username or 'Неизвестно'} (ID: {photo_user_id})\n📅 Дата: {date}"
         
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🔄 Ещё", callback_data="menu_random"),
-            InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
-        ]])
+                keyboard = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔄 Ещё", callback_data="menu_random"),
+                    InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
+                ]])
         
-        query.message.reply_photo(photo=photo_id, caption=caption, reply_markup=keyboard)
-        query.message.delete()
-    else:
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
-        ]])
-        query.edit_message_text(
-            "📸 В галерее пока нет фотографий. Отправь своё фото!",
-            reply_markup=keyboard
-        )
-    return
+                query.message.reply_photo(photo=photo_id, caption=caption, reply_markup=keyboard)
+                query.message.delete()
+            else:
+                keyboard = InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
+                ]])
+                query.edit_message_text(
+                    "📸 В галерее пока нет фотографий. Отправь своё фото!",
+                    reply_markup=keyboard
+                )
+            return
 
 # Подписка
 elif query.data == "menu_subscription":
