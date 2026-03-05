@@ -750,40 +750,40 @@ def button_handler(update: Update, context: CallbackContext):
         )
         return
     
-    # Случайное фото
-    elif query.data == "menu_random":
-        photo_id = get_random_photo()
-        if photo_id:
-            count = get_photos_count()
-            caption = f"🎲 Случайное фото из галереи\nВсего фотографий: {count}"
+# Случайное фото
+elif query.data == "menu_random":
+    photo_id = get_random_photo()
+    if photo_id:
+        count = get_photos_count()
+        caption = f"🎲 Случайное фото из галереи\nВсего фотографий: {count}"
+        
+        if is_tracking_enabled() and is_admin(user_id):
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("SELECT username, user_id, date FROM photos WHERE file_id = ?", (photo_id,))
+            photo_info = c.fetchone()
+            conn.close()
             
-            if is_tracking_enabled() and is_admin(user_id):
-                conn = sqlite3.connect(DB_PATH)
-                c = conn.cursor()
-                c.execute("SELECT username, user_id, date FROM photos WHERE file_id = ?", (photo_id,))
-                photo_info = c.fetchone()
-                conn.close()
-                
-                if photo_info:
-                    username, photo_user_id, date = photo_info
-                    caption += f"\n\n👤 Отправил: @{username or 'Неизвестно'} (ID: {photo_user_id})\n📅 Дата: {date}"
-            
-            keyboard = InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔄 Ещё", callback_data="menu_random"),
-                InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
-            ]])
-            
-            query.message.reply_photo(photo=photo_id, caption=caption, reply_markup=keyboard)
-            query.message.delete()
-        else:
-            keyboard = InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
-            ]])
-            query.edit_message_text(
-                "📸 В галерее пока нет фотографий. Отправь своё фото!",
-                reply_markup=keyboard
-            )
-        return
+            if photo_info:
+                username, photo_user_id, date = photo_info
+                caption += f"\n\n👤 Отправил: @{username or 'Неизвестно'} (ID: {photo_user_id})\n📅 Дата: {date}"
+        
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔄 Ещё", callback_data="menu_random"),
+            InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
+        ]])
+        
+        query.message.reply_photo(photo=photo_id, caption=caption, reply_markup=keyboard)
+        query.message.delete()
+    else:
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
+        ]])
+        query.edit_message_text(
+            "📸 В галерее пока нет фотографий. Отправь своё фото!",
+            reply_markup=keyboard
+        )
+    return
 
 # Подписка
 elif query.data == "menu_subscription":
@@ -804,6 +804,25 @@ elif query.data == "menu_subscription":
             [InlineKeyboardButton("✅ Решенное ДЗ", callback_data="menu_solved_hw")],
             [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
         ]
+    else:
+        text = (
+            f"⭐ **Подписка за {STAR_PRICE} звёзд**\n\n"
+            f"Что дает подписка:\n"
+            f"✅ Доступ к решенному домашнему заданию\n"
+            f"✅ Приоритетная поддержка\n"
+            f"✅ +10% к рейтингу за фото\n\n"
+            f"Как оплатить:\n"
+            f"1. Нажмите кнопку 'Оплатить звёздами'\n"
+            f"2. Подтвердите платеж\n"
+            f"3. Получите доступ!"
+        )
+        keyboard = [
+            [InlineKeyboardButton(f"⭐ Оплатить {STAR_PRICE} звёзд", callback_data="pay_subscription")],
+            [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
+        ]
+    
+    query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+    return
     else:
         text = (
             f"⭐ **Подписка за {STAR_PRICE} звёзд**\n\n"
