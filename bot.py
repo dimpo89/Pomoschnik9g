@@ -41,7 +41,7 @@ def init_db():
                   subject TEXT,
                   photo_ids TEXT,
                   date TEXT,
-                  expires_at TEXT)''') 
+                  expires_at TEXT)''')
     
     # Таблица с фотографиями
     c.execute('''CREATE TABLE IF NOT EXISTS photos
@@ -1008,3 +1008,108 @@ def handle_text(update: Update, context: CallbackContext):
                 user_id = int(parts[0])
                 days = int(parts[1]) if len(parts) > 1 else 30
                 
+                give_subscription(user_id, days)
+                update.message.reply_text(
+                    f"✅ Пользователю {user_id} выдана подписка на {days} дней",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")
+                    ]])
+                )
+                context.user_data['admin_action'] = None
+                
+                try:
+                    context.bot.send_message(
+                        chat_id=user_id,
+                        text=f"⭐ Вам выдана подписка на {days} дней! Используйте /start для доступа к функциям."
+                    )
+                except:
+                    pass
+            except Exception as e:
+                update.message.reply_text("❌ Неверный формат. Используйте: `ID дни`")
+        
+        elif action == 'broadcast':
+            # Сохраняем сообщение для рассылки
+            context.user_data['broadcast_message'] = text
+            users = get_all_users()
+            
+            update.message.reply_text(
+                f"📢 Начинаю рассылку {len(users)} пользователям...\n"
+                f"Это может занять некоторое время.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")
+                ]])
+            )
+            
+            # Отправляем сообщение всем пользователям
+            success = 0
+            failed = 0
+            
+            for user_id in users:
+                try:
+                    context.bot.send_message(
+                        chat_id=user_id,
+                        text=f"📢 **Сообщение от администрации:**\n\n{text}",
+                        parse_mode="Markdown"
+                    )
+                    success += 1
+                except:
+                    failed += 1
+                
+                # Небольшая задержка, чтобы не превысить лимиты Telegram
+                time.sleep(0.05)
+            
+            save_broadcast(user.id, text)
+            
+            update.message.reply_text(
+                f"✅ Рассылка завершена!\n"
+                f"📨 Успешно: {success}\n"
+                f"❌ Не удалось: {failed}",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")
+                ]])
+            )
+            
+            context.user_data['admin_action'] = None
+
+# ================== ОБРАБОТЧИК ЗВЁЗД ==================
+def handle_stars(update: Update, context: CallbackContext):
+    """Обработчик оплаты звёздами"""
+    user = update.effective_user
+    
+    if update.message.successful_payment:
+        # Подтверждение оплаты
+        give_subscription(user.id, 30)  # 30 дней подписки
+        update.message.reply_text(
+            "⭐ Спасибо за покупку! Подписка активирована на 30 дней.\n"
+            "Теперь вам доступно решенное домашнее задание!",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Решенное ДЗ", callback_data="menu_solved_hw"),
+                InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")
+            ]])
+        )
+
+# ================== ЗАПУСК БОТА ==================
+def main():
+    # Инициализация БД
+    init_db()
+    
+    # Создаем updater
+    updater = Updater(TOKEN, use_context=True)
+    dp = updater.dispatcher
+    
+    # Регистрируем обработчики
+    dp.add_handler(CommandHandler("start", start))
+    dp.add_handler(CallbackQueryHandler(button_handler))
+    dp.add_handler(MessageHandler(Filters.photo, handle_photo))
+    dp.add_handler(MessageHandler(Filters.text & ~Filters.command, handle_text))
+    dp.add_handler(MessageHandler(Filters.successful_payment, handle_stars))
+    
+    print("🚀 Бот 'Помощник 9Г' запущен...")
+    print(f"👑 Главный администратор ID: {ADMIN_IDS[0]}")
+    
+    # Запускаем бота
+    updater.start_polling()
+    updater.idle()
+
+if __name__ == "__main__":
+    main()
