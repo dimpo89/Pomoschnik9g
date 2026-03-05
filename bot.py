@@ -39,9 +39,9 @@ def init_db():
     c.execute('''CREATE TABLE IF NOT EXISTS solved_homework
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   subject TEXT,
-                  photo_ids TEXT,  -- Храним несколько фото через запятую
+                  photo_ids TEXT,
                   date TEXT,
-                  expires_at TEXT)''')  -- Дата истечения
+                  expires_at TEXT)''')  #-- Дата истечения
     
     # Таблица с фотографиями
     c.execute('''CREATE TABLE IF NOT EXISTS photos
