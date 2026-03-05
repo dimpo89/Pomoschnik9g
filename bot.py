@@ -795,16 +795,16 @@ def button_handler(update: Update, context: CallbackContext):
             )
         return
     
-    # Отправить фото
-    elif query.data == "menu_photo":
-        query.edit_message_text(
-            "📸 Отправьте мне фото, и оно будет отправлено на модерацию.\n\n"
-            "После проверки администратором фото появится в галерее.",
-            reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
-            ]])
-        )
-        return
+# Отправить фото
+elif query.data == "menu_photo":
+    query.edit_message_text(
+        "📸 Отправьте мне фото, и оно будет отправлено на модерацию.\n\n"
+        "После проверки администратором фото появится в галерее.",
+        reply_markup=InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
+        ]])
+    )
+    return
 
 # Случайное фото
 elif query.data == "menu_random":
