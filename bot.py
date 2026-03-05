@@ -4,8 +4,6 @@ import sqlite3
 from datetime import datetime, timedelta
 from functools import wraps
 import time
-import asyncio
-from collections import deque
 from threading import Thread
 from queue import Queue
 
@@ -14,10 +12,10 @@ from telegram.ext import Updater, CommandHandler, MessageHandler, CallbackQueryH
 
 # ================== НАСТРОЙКИ ==================
 TOKEN = "8623075329:AAHRnpXR1nMd5m-STE8daYUAevtL9D38jEQ"
-ADMIN_IDS = [1553865459]  # Ваш ID
+ADMIN_IDS = [1553865459]
 DB_PATH = "homework_bot.db"
-STAR_PRICE = 50  # Цена подписки в звёздах
-PHOTO_EXPIRE_DAYS = 7  # Фото удаляются через 7 дней
+STAR_PRICE = 50
+PHOTO_EXPIRE_DAYS = 7
 
 # ================== ЛОГИРОВАНИЕ ==================
 logging.basicConfig(
@@ -31,7 +29,6 @@ def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     
-    # Таблица с домашним заданием
     c.execute('''CREATE TABLE IF NOT EXISTS homework
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   subject TEXT,
@@ -39,7 +36,6 @@ def init_db():
                   type TEXT DEFAULT 'regular',
                   date TEXT)''')
     
-    # Таблица с решенным домашним заданием (для подписчиков)
     c.execute('''CREATE TABLE IF NOT EXISTS solved_homework
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   subject TEXT,
@@ -47,7 +43,6 @@ def init_db():
                   date TEXT,
                   expires_at TEXT)''')
     
-    # Таблица с фотографиями (с модерацией)
     c.execute('''CREATE TABLE IF NOT EXISTS photos
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   file_id TEXT,
@@ -58,14 +53,12 @@ def init_db():
                   moderated_by INTEGER,
                   moderation_date TEXT)''')
     
-    # Таблица с администраторами
     c.execute('''CREATE TABLE IF NOT EXISTS admins
                  (user_id INTEGER PRIMARY KEY,
                   username TEXT,
                   added_by INTEGER,
                   date TEXT)''')
     
-    # Таблица с пользователями и подписками
     c.execute('''CREATE TABLE IF NOT EXISTS users
                  (user_id INTEGER PRIMARY KEY,
                   username TEXT,
@@ -79,12 +72,10 @@ def init_db():
                   photos_count INTEGER DEFAULT 0,
                   last_active TEXT)''')
     
-    # Таблица с настройками слежки
     c.execute('''CREATE TABLE IF NOT EXISTS settings
                  (key TEXT PRIMARY KEY,
                   value TEXT)''')
     
-    # Таблица с жалобами/связью с администратором
     c.execute('''CREATE TABLE IF NOT EXISTS reports
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   user_id INTEGER,
@@ -93,7 +84,6 @@ def init_db():
                   date TEXT,
                   status TEXT DEFAULT 'new')''')
     
-    # Таблица для рассылок
     c.execute('''CREATE TABLE IF NOT EXISTS broadcasts
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   admin_id INTEGER,
@@ -101,7 +91,6 @@ def init_db():
                   date TEXT,
                   status TEXT DEFAULT 'pending')''')
     
-    # Таблица для ежедневных фактов
     c.execute('''CREATE TABLE IF NOT EXISTS daily_facts
                  (id INTEGER PRIMARY KEY AUTOINCREMENT,
                   fact TEXT,
@@ -109,72 +98,8 @@ def init_db():
                   added_by INTEGER,
                   date TEXT)''')
     
-    # Таблица для опросов
-    c.execute('''CREATE TABLE IF NOT EXISTS polls
-                 (id INTEGER PRIMARY KEY AUTOINCREMENT,
-                  question TEXT,
-                  options TEXT,
-                  created_by INTEGER,
-                  date TEXT,
-                  expires_at TEXT,
-                  is_active INTEGER DEFAULT 1)''')
-    
-    # Таблица для голосов в опросах
-    c.execute('''CREATE TABLE IF NOT EXISTS poll_votes
-                 (poll_id INTEGER,
-                  user_id INTEGER,
-                  option_index INTEGER,
-                  date TEXT,
-                  PRIMARY KEY (poll_id, user_id))''')
-    
     conn.commit()
     conn.close()
-
-# ================== ФУНКЦИИ ДЛЯ УСКОРЕНИЯ РАБОТЫ ==================
-cache = {
-    'stats': {'data': None, 'timestamp': 0},
-    'homework': {'data': None, 'timestamp': 0},
-    'solved_hw': {'data': None, 'timestamp': 0},
-    'photo_count': {'data': 0, 'timestamp': 0},
-    'random_photo': {'data': None, 'timestamp': 0}
-}
-CACHE_TTL = 60
-
-def get_cached_or_query(key, query_func, ttl=CACHE_TTL):
-    now = time.time()
-    if key in cache and now - cache[key]['timestamp'] < ttl:
-        return cache[key]['data']
-    
-    data = query_func()
-    cache[key] = {'data': data, 'timestamp': now}
-    return data
-
-def invalidate_cache(keys=None):
-    if keys:
-        for key in keys:
-            if key in cache:
-                cache[key]['timestamp'] = 0
-    else:
-        for key in cache:
-            cache[key]['timestamp'] = 0
-
-task_queue = Queue()
-
-def worker():
-    while True:
-        task = task_queue.get()
-        if task is None:
-            break
-        try:
-            task['func'](*task['args'], **task['kwargs'])
-        except Exception as e:
-            logger.error(f"Ошибка в фоновой задаче: {e}")
-        task_queue.task_done()
-
-Thread(target=worker, daemon=True).start()
-
-def add_background_task(func, *args, **kwargs):
-    task_queue.put({'func': func, 'args': args, 'kwargs': kwargs})
 
 # ================== ФУНКЦИИ ДЛЯ РАБОТЫ С БД ==================
 
@@ -195,7 +120,6 @@ def add_admin(user_id, username, added_by):
               (user_id, username, added_by, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
     conn.commit()
     conn.close()
-    invalidate_cache(['stats'])
 
 def remove_admin(user_id):
     conn = sqlite3.connect(DB_PATH)
@@ -203,7 +127,6 @@ def remove_admin(user_id):
     c.execute("DELETE FROM admins WHERE user_id = ?", (user_id,))
     conn.commit()
     conn.close()
-    invalidate_cache(['stats'])
 
 def is_tracking_enabled():
     conn = sqlite3.connect(DB_PATH)
@@ -234,7 +157,6 @@ def register_user(user_id, username, first_name):
                   (datetime.now().strftime("%Y-%m-%d %H:%M:%S"), username, user_id))
     conn.commit()
     conn.close()
-    invalidate_cache(['stats'])
 
 def get_all_users():
     conn = sqlite3.connect(DB_PATH)
@@ -282,7 +204,6 @@ def ban_user(user_id, duration_hours=None):
     
     conn.commit()
     conn.close()
-    invalidate_cache(['stats'])
 
 def unban_user(user_id):
     conn = sqlite3.connect(DB_PATH)
@@ -290,7 +211,6 @@ def unban_user(user_id):
     c.execute("UPDATE users SET banned_until = NULL, is_permanently_banned = 0 WHERE user_id = ?", (user_id,))
     conn.commit()
     conn.close()
-    invalidate_cache(['stats'])
 
 def give_subscription(user_id, days=30):
     conn = sqlite3.connect(DB_PATH)
@@ -312,7 +232,6 @@ def give_subscription(user_id, days=30):
               (new_end.strftime("%Y-%m-%d %H:%M:%S"), user_id))
     conn.commit()
     conn.close()
-    invalidate_cache(['stats'])
 
 def has_subscription(user_id):
     conn = sqlite3.connect(DB_PATH)
@@ -342,7 +261,6 @@ def add_photo_pending(file_id, user_id, username):
     photo_id = c.lastrowid
     conn.commit()
     conn.close()
-    invalidate_cache(['stats', 'photo_count'])
     return photo_id
 
 def approve_photo(photo_id, admin_id):
@@ -353,7 +271,6 @@ def approve_photo(photo_id, admin_id):
     c.execute("UPDATE users SET photos_count = photos_count + 1 WHERE user_id = (SELECT user_id FROM photos WHERE id = ?)", (photo_id,))
     conn.commit()
     conn.close()
-    invalidate_cache(['stats', 'photo_count'])
 
 def reject_photo(photo_id, admin_id):
     conn = sqlite3.connect(DB_PATH)
@@ -362,7 +279,6 @@ def reject_photo(photo_id, admin_id):
               (admin_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), photo_id))
     conn.commit()
     conn.close()
-    invalidate_cache(['stats', 'photo_count'])
 
 def get_pending_photos():
     conn = sqlite3.connect(DB_PATH)
@@ -373,26 +289,20 @@ def get_pending_photos():
     return results
 
 def get_random_photo():
-    def _query():
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("SELECT file_id FROM photos WHERE status = 'approved'")
-        photos = c.fetchall()
-        conn.close()
-        if photos:
-            return random.choice(photos)[0]
-        return None
-    
-    return get_cached_or_query('random_photo', _query, ttl=30)
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT file_id FROM photos WHERE status = 'approved'")
+    photos = c.fetchall()
+    conn.close()
+    if photos:
+        return random.choice(photos)[0]
+    return None
 
 def get_photos_count():
-    def _query():
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("SELECT COUNT(*) FROM photos WHERE status = 'approved'")
-        return c.fetchone()[0]
-    
-    return get_cached_or_query('photo_count', _query)
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT COUNT(*) FROM photos WHERE status = 'approved'")
+    return c.fetchone()[0]
 
 def set_homework(subject, task):
     conn = sqlite3.connect(DB_PATH)
@@ -401,16 +311,12 @@ def set_homework(subject, task):
               (subject, task, 'regular', datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
     conn.commit()
     conn.close()
-    invalidate_cache(['homework'])
 
 def get_homework():
-    def _query():
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("SELECT subject, task FROM homework WHERE type='regular' ORDER BY id DESC LIMIT 1")
-        return c.fetchone()
-    
-    return get_cached_or_query('homework', _query)
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT subject, task FROM homework WHERE type='regular' ORDER BY id DESC LIMIT 1")
+    return c.fetchone()
 
 def add_solved_homework(subject, photo_ids):
     conn = sqlite3.connect(DB_PATH)
@@ -425,26 +331,22 @@ def add_solved_homework(subject, photo_ids):
               (subject, photo_ids_str, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), expires_at))
     conn.commit()
     conn.close()
-    invalidate_cache(['solved_hw'])
 
 def get_solved_homework():
-    def _query():
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        
-        c.execute("DELETE FROM solved_homework WHERE expires_at < datetime('now')")
-        
-        c.execute("SELECT subject, photo_ids FROM solved_homework ORDER BY id DESC LIMIT 1")
-        result = c.fetchone()
-        conn.close()
-        
-        if result:
-            subject, photo_ids_str = result
-            photo_ids = photo_ids_str.split(',') if photo_ids_str else []
-            return subject, photo_ids
-        return None, []
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
     
-    return get_cached_or_query('solved_hw', _query, ttl=30)
+    c.execute("DELETE FROM solved_homework WHERE expires_at < datetime('now')")
+    
+    c.execute("SELECT subject, photo_ids FROM solved_homework ORDER BY id DESC LIMIT 1")
+    result = c.fetchone()
+    conn.close()
+    
+    if result:
+        subject, photo_ids_str = result
+        photo_ids = photo_ids_str.split(',') if photo_ids_str else []
+        return subject, photo_ids
+    return None, []
 
 def add_report(user_id, username, message):
     conn = sqlite3.connect(DB_PATH)
@@ -454,7 +356,6 @@ def add_report(user_id, username, message):
     report_id = c.lastrowid
     conn.commit()
     conn.close()
-    invalidate_cache(['reports'])
     return report_id
 
 def get_new_reports():
@@ -481,7 +382,6 @@ def save_broadcast(admin_id, message):
     conn.commit()
     conn.close()
     return broadcast_id
-# ================== НОВЫЕ ФУНКЦИИ ==================
 
 def add_daily_fact(fact, category, added_by):
     conn = sqlite3.connect(DB_PATH)
@@ -491,7 +391,6 @@ def add_daily_fact(fact, category, added_by):
     fact_id = c.lastrowid
     conn.commit()
     conn.close()
-    invalidate_cache(['facts'])
     return fact_id
 
 def get_random_fact():
@@ -510,74 +409,6 @@ def get_facts_count():
     conn.close()
     return count
 
-def create_poll(question, options, created_by, hours_duration=24):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    options_str = '|'.join(options)
-    expires_at = (datetime.now() + timedelta(hours=hours_duration)).strftime("%Y-%m-%d %H:%M:%S")
-    c.execute("INSERT INTO polls (question, options, created_by, date, expires_at) VALUES (?, ?, ?, ?, ?)",
-              (question, options_str, created_by, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), expires_at))
-    poll_id = c.lastrowid
-    conn.commit()
-    conn.close()
-    invalidate_cache(['polls'])
-    return poll_id
-
-def get_active_polls():
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT id, question, options, created_by, date, expires_at FROM polls WHERE is_active=1 AND expires_at > datetime('now') ORDER BY date DESC")
-    results = c.fetchall()
-    conn.close()
-    return results
-
-def vote_in_poll(poll_id, user_id, option_index):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    try:
-        c.execute("INSERT INTO poll_votes (poll_id, user_id, option_index, date) VALUES (?, ?, ?, ?)",
-                  (poll_id, user_id, option_index, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
-        conn.commit()
-        success = True
-    except sqlite3.IntegrityError:
-        success = False
-    conn.close()
-    invalidate_cache([f'poll_{poll_id}'])
-    return success
-
-def get_poll_results(poll_id):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT question, options FROM polls WHERE id=?", (poll_id,))
-    poll = c.fetchone()
-    if not poll:
-        conn.close()
-        return None
-    
-    question, options_str = poll
-    options = options_str.split('|')
-    
-    c.execute("SELECT option_index, COUNT(*) FROM poll_votes WHERE poll_id=? GROUP BY option_index", (poll_id,))
-    votes = dict(c.fetchall())
-    
-    total_votes = sum(votes.values())
-    results = []
-    for i, option in enumerate(options):
-        count = votes.get(i, 0)
-        percentage = (count / total_votes * 100) if total_votes > 0 else 0
-        results.append((option, count, percentage))
-    
-    conn.close()
-    return question, results, total_votes
-
-def close_poll(poll_id):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("UPDATE polls SET is_active=0 WHERE id=?", (poll_id,))
-    conn.commit()
-    conn.close()
-    invalidate_cache(['polls'])
-
 def get_user_rating(user_id):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -592,7 +423,6 @@ def add_user_rating(user_id, points):
     c.execute("UPDATE users SET rating = rating + ? WHERE user_id=?", (points, user_id))
     conn.commit()
     conn.close()
-    invalidate_cache(['ratings'])
 
 def get_top_users(limit=10):
     conn = sqlite3.connect(DB_PATH)
@@ -610,16 +440,10 @@ def cleanup_old_data():
     c.execute("DELETE FROM photos WHERE date < ? AND status = 'approved'", (expire_date,))
     
     old_date = (datetime.now() - timedelta(days=7)).strftime("%Y-%m-%d %H:%M:%S")
-    c.execute("DELETE FROM polls WHERE is_active=0 AND date < ?", (old_date,))
-    c.execute("DELETE FROM poll_votes WHERE poll_id NOT IN (SELECT id FROM polls)")
-    
     c.execute("DELETE FROM reports WHERE status='read' AND date < ?", (old_date,))
     
     conn.commit()
     conn.close()
-    invalidate_cache()
-
-add_background_task(cleanup_old_data)
 
 # ================== ДЕКОРАТОРЫ ==================
 def admin_required(func):
@@ -642,7 +466,7 @@ def not_banned(func):
         return func(update, context, *args, **kwargs)
     return wrapper
 
-# ================== ФУНКЦИЯ ДЛЯ ВОЗВРАТА В МЕНЮ ==================
+# ================== ФУНКЦИЯ ДЛЯ МЕНЮ ==================
 def get_main_menu_keyboard(user_id):
     keyboard = [
         [InlineKeyboardButton("📚 Домашнее задание", callback_data="menu_hw")],
@@ -663,13 +487,10 @@ def get_main_menu_keyboard(user_id):
 def start(update: Update, context: CallbackContext):
     user = update.effective_user
     register_user(user.id, user.username, user.first_name)
-    
-    welcome_text = (
-        f"👋 Привет, {user.first_name}!\n\n"
-        "Я бот-помощник 9Г класса. Выбери действие:"
+    update.message.reply_text(
+        f"👋 Привет, {user.first_name}!\n\nЯ бот-помощник 9Г класса. Выбери действие:",
+        reply_markup=get_main_menu_keyboard(user.id)
     )
-    
-    update.message.reply_text(welcome_text, reply_markup=get_main_menu_keyboard(user.id))
 
 def button_handler(update: Update, context: CallbackContext):
     query = update.callback_query
@@ -686,32 +507,27 @@ def button_handler(update: Update, context: CallbackContext):
         return
     
     # Домашнее задание
-    elif query.data == "menu_hw":
+    if query.data == "menu_hw":
         hw = get_homework()
-        
         if hw:
             text = f"📚 **Домашнее задание:**\n\n**Предмет:** {hw[0]}\n**Задание:** {hw[1]}"
         else:
             text = "📚 Домашнее задание пока не добавлено."
-        
         keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]]
-        
         if has_subscription(user_id):
             keyboard.insert(0, [InlineKeyboardButton("✅ Решенное ДЗ", callback_data="menu_solved_hw")])
-        
         query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
         return
     
     # Решенное ДЗ
-    elif query.data == "menu_solved_hw":
+    if query.data == "menu_solved_hw":
         if not has_subscription(user_id):
             keyboard = [
                 [InlineKeyboardButton("⭐ Купить подписку", callback_data="menu_subscription")],
                 [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
             ]
             query.edit_message_text(
-                "❌ У вас нет подписки!\n\n"
-                "Купите подписку за 50 ⭐ или попросите администратора выдать её.",
+                "❌ У вас нет подписки!\n\nКупите подписку за 50 ⭐ или попросите администратора выдать её.",
                 reply_markup=InlineKeyboardMarkup(keyboard)
             )
             return
@@ -719,11 +535,9 @@ def button_handler(update: Update, context: CallbackContext):
         subject, photo_ids = get_solved_homework()
         if photo_ids:
             query.edit_message_text(f"✅ Решенное домашнее задание\nПредмет: {subject}\n\nЗагружаю фото...")
-            
             for i, photo_id in enumerate(photo_ids, 1):
                 caption = f"✅ Решенное ДЗ - {subject} (фото {i}/{len(photo_ids)})" if len(photo_ids) > 1 else f"✅ Решенное ДЗ - {subject}"
                 query.message.reply_photo(photo=photo_id, caption=caption)
-            
             query.message.reply_text(
                 "Выберите действие:",
                 reply_markup=InlineKeyboardMarkup([[
@@ -732,374 +546,328 @@ def button_handler(update: Update, context: CallbackContext):
             )
             query.message.delete()
         else:
-            keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]]
             query.edit_message_text(
                 "📝 Решенное домашнее задание пока не добавлено.",
-                reply_markup=InlineKeyboardMarkup(keyboard)
-            )
-        return
-        # Отправить фото
-        elif query.data == "menu_photo":
-             query.edit_message_text(
-                "📸 Отправьте мне фото, и оно будет отправлено на модерацию.\n\n"
-                "После проверки администратором фото появится в галерее.",
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
                 ]])
             )
-            return
-
-        # Случайное фото
-        elif query.data == "menu_random":
-            photo_id = get_random_photo()
-            if photo_id:
-                count = get_photos_count()
-                caption = f"🎲 Случайное фото из галереи\nВсего фотографий: {count}"
-        
-                if is_tracking_enabled() and is_admin(user_id):
-                    conn = sqlite3.connect(DB_PATH)
-                    c = conn.cursor()
-                    c.execute("SELECT username, user_id, date FROM photos WHERE file_id = ?", (photo_id,))
-                    photo_info = c.fetchone()
-                    conn.close()
-            
-                    if photo_info:
-                        username, photo_user_id, date = photo_info
-                        caption += f"\n\n👤 Отправил: @{username or 'Неизвестно'} (ID: {photo_user_id})\n📅 Дата: {date}"
-        
-                keyboard = InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🔄 Ещё", callback_data="menu_random"),
-                    InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
-                ]])
-        
-                query.message.reply_photo(photo=photo_id, caption=caption, reply_markup=keyboard)
-                query.message.delete()
-            else:
-                keyboard = InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
-                ]])
-                query.edit_message_text(
-                    "📸 В галерее пока нет фотографий. Отправь своё фото!",
-                    reply_markup=keyboard
-                )
-            return
-
-# Подписка
-elif query.data == "menu_subscription":
-    if has_subscription(user_id):
-        conn = sqlite3.connect(DB_PATH)
-        c = conn.cursor()
-        c.execute("SELECT subscription_end FROM users WHERE user_id = ?", (user_id,))
-        end_date = c.fetchone()[0]
-        conn.close()
-        
-        text = (
-            f"⭐ **У вас активна подписка!**\n\n"
-            f"Действует до: {end_date}\n\n"
-            f"Доступно:\n"
-            f"✅ Решенное домашнее задание"
-        )
-        keyboard = [
-            [InlineKeyboardButton("✅ Решенное ДЗ", callback_data="menu_solved_hw")],
-            [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
-        ]
-    else:
-        text = (
-            f"⭐ **Подписка за {STAR_PRICE} звёзд**\n\n"
-            f"Что дает подписка:\n"
-            f"✅ Доступ к решенному домашнему заданию\n"
-            f"✅ Приоритетная поддержка\n"
-            f"✅ +10% к рейтингу за фото\n\n"
-            f"Как оплатить:\n"
-            f"1. Нажмите кнопку 'Оплатить звёздами'\n"
-            f"2. Подтвердите платеж\n"
-            f"3. Получите доступ!"
-        )
-        keyboard = [
-            [InlineKeyboardButton(f"⭐ Оплатить {STAR_PRICE} звёзд", callback_data="pay_subscription")],
-            [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
-        ]
+        return
     
-    query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
-    return
-    else:
-        text = (
-            f"⭐ **Подписка за {STAR_PRICE} звёзд**\n\n"
-            f"Что дает подписка:\n"
-            f"✅ Доступ к решенному домашнему заданию\n"
-            f"✅ Приоритетная поддержка\n"
-            f"✅ +10% к рейтингу за фото\n\n"
-            f"Как оплатить:\n"
-            f"1. Нажмите кнопку 'Оплатить звёздами'\n"
-            f"2. Подтвердите платеж\n"
-            f"3. Получите доступ!"
-        )
-        keyboard = [
-            [InlineKeyboardButton(f"⭐ Оплатить {STAR_PRICE} звёзд", callback_data="pay_subscription")],
-            [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
-        ]
-    
-    query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
-    return
-
-# Оплата подписки
-elif query.data == "pay_subscription":
-    query.edit_message_text(
-        f"⭐ Для оплаты подписки отправьте {STAR_PRICE} звёзд этому боту.\n\n"
-        f"Инструкция:\n"
-        f"1. Нажмите на скрепку 📎\n"
-        f"2. Выберите 💎 'Звёзды'\n"
-        f"3. Укажите количество: {STAR_PRICE}\n"
-        f"4. Отправьте и подписка активируется!\n\n"
-        f"Или попросите администратора выдать подписку.",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("🔙 Назад", callback_data="menu_subscription")
-        ]])
-    )
-    return
-
-# Связь с админом
-elif query.data == "menu_support":
-    query.edit_message_text(
-        "📞 Напишите ваше сообщение для администратора.\n\n"
-        "Опишите проблему или задайте вопрос — мы ответим как можно скорее!",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
-        ]])
-    )
-    context.user_data['waiting_for_support'] = True
-    return
-
-# Рейтинг пользователя
-elif query.data == "menu_rating":
-    rating, photos = get_user_rating(user_id)
-    top_users = get_top_users(5)
-    
-    text = f"📊 **Ваш профиль**\n\n"
-    text += f"⭐ Рейтинг: {rating}\n"
-    text += f"📸 Одобренных фото: {photos}\n\n"
-    
-    if top_users:
-        text += "🏆 **Топ пользователей:**\n"
-        for i, (uid, uname, fname, rate, pcount) in enumerate(top_users, 1):
-            name = uname or fname or f"ID{uid}"
-            text += f"{i}. {name} — {rate} ⭐\n"
-    
-    keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]]
-    query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
-    return
-
-# Интересный факт
-elif query.data == "menu_fact":
-    fact_info = get_random_fact()
-    if fact_info:
-        fact, category = fact_info
-        text = f"🎯 **Интересный факт**\n\n{fact}\n\n📚 Категория: {category}"
-    else:
-        text = "🎯 Факты пока не добавлены. Администраторы скоро добавят!"
-    
-    keyboard = [
-        [InlineKeyboardButton("🔄 Ещё факт", callback_data="menu_fact")],
-        [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
-    ]
-    query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
-    return
-
-# Админ-меню
-elif query.data == "admin_menu" and is_admin(user_id):
-    keyboard = [
-        [InlineKeyboardButton("📝 Изменить ДЗ", callback_data="admin_hw")],
-        [InlineKeyboardButton("✅ Добавить решенное ДЗ", callback_data="admin_solved_hw")],
-        [InlineKeyboardButton("📸 Модерация фото", callback_data="admin_moderate")],
-        [InlineKeyboardButton("➕ Добавить админа", callback_data="admin_add")],
-        [InlineKeyboardButton("❌ Удалить админа", callback_data="admin_remove")],
-        [InlineKeyboardButton("🚫 Бан пользователя", callback_data="admin_ban")],
-        [InlineKeyboardButton("✅ Разбан пользователя", callback_data="admin_unban")],
-        [InlineKeyboardButton("⭐ Выдать подписку", callback_data="admin_subscription")],
-        [InlineKeyboardButton("📢 Рассылка", callback_data="admin_broadcast")],
-        [InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")],
-        [InlineKeyboardButton("📞 Сообщения в поддержку", callback_data="admin_reports")],
-        [InlineKeyboardButton("👁️ Слежка", callback_data="admin_tracking")],
-        [InlineKeyboardButton("➕ Добавить факт", callback_data="admin_add_fact")],
-        [InlineKeyboardButton("📊 Управление рейтингом", callback_data="admin_rating")],
-        [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")],
-    ]
-    query.edit_message_text("👑 **Админ-панель**", parse_mode="Markdown", 
-                          reply_markup=InlineKeyboardMarkup(keyboard))
-    return
-
-# Модерация фото
-elif query.data == "admin_moderate" and is_admin(user_id):
-    pending = get_pending_photos()
-    if not pending:
+    # Отправить фото
+    if query.data == "menu_photo":
         query.edit_message_text(
-            "📸 Нет фото на модерации.",
+            "📸 Отправьте мне фото, и оно будет отправлено на модерацию.\n\nПосле проверки администратором фото появится в галерее.",
             reply_markup=InlineKeyboardMarkup([[
-                InlineKeyboardButton("🔙 Назад", callback_data="admin_menu")
+                InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
             ]])
         )
         return
     
-    context.user_data['pending_photos'] = pending
-    context.user_data['pending_index'] = 0
-    show_pending_photo(query, context, 0)
-    return
-
-# Одобрить фото
-elif query.data.startswith("approve_photo_"):
-    photo_id = int(query.data.split("_")[2])
-    approve_photo(photo_id, user_id)
-    
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT user_id FROM photos WHERE id=?", (photo_id,))
-    photo_user = c.fetchone()
-    conn.close()
-    
-    if photo_user:
-        add_user_rating(photo_user[0], 10)
-    
-    if 'pending_photos' in context.user_data:
-        pending = context.user_data['pending_photos']
-        index = context.user_data.get('pending_index', 0) + 1
-        if index < len(pending):
-            show_pending_photo(query, context, index)
+    # Случайное фото
+    if query.data == "menu_random":
+        photo_id = get_random_photo()
+        if photo_id:
+            count = get_photos_count()
+            caption = f"🎲 Случайное фото из галереи\nВсего фотографий: {count}"
+            
+            if is_tracking_enabled() and is_admin(user_id):
+                conn = sqlite3.connect(DB_PATH)
+                c = conn.cursor()
+                c.execute("SELECT username, user_id, date FROM photos WHERE file_id = ?", (photo_id,))
+                photo_info = c.fetchone()
+                conn.close()
+                if photo_info:
+                    username, photo_user_id, date = photo_info
+                    caption += f"\n\n👤 Отправил: @{username or 'Неизвестно'} (ID: {photo_user_id})\n📅 Дата: {date}"
+            
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔄 Ещё", callback_data="menu_random"),
+                InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
+            ]])
+            
+            query.message.reply_photo(photo=photo_id, caption=caption, reply_markup=keyboard)
+            query.message.delete()
         else:
             query.edit_message_text(
-                "✅ Все фото обработаны!",
+                "📸 В галерее пока нет фотографий. Отправь своё фото!",
                 reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🔙 Назад", callback_data="admin_menu")
+                    InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
                 ]])
             )
-            context.user_data.pop('pending_photos', None)
-            context.user_data.pop('pending_index', None)
-    return
-
-# Отклонить фото
-elif query.data.startswith("reject_photo_"):
-    photo_id = int(query.data.split("_")[2])
-    reject_photo(photo_id, user_id)
+        return
     
-    if 'pending_photos' in context.user_data:
-        pending = context.user_data['pending_photos']
-        index = context.user_data.get('pending_index', 0) + 1
-        if index < len(pending):
-            show_pending_photo(query, context, index)
-        else:
-            query.edit_message_text(
-                "✅ Все фото обработаны!",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🔙 Назад", callback_data="admin_menu")
-                ]])
-            )
-            context.user_data.pop('pending_photos', None)
-            context.user_data.pop('pending_index', None)
-    return
-
-# Добавить факт
-elif query.data == "admin_add_fact" and is_admin(user_id):
-    query.edit_message_text(
-        "📝 Введите факт в формате:\n"
-        "`Категория: Факт`\n\n"
-        "Пример: `Наука: Вода кипит при 100°C`\n"
-        "Или: `История: Первый компьютер весил 30 тонн`",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("🔙 Отмена", callback_data="admin_menu")
-        ]])
-    )
-    context.user_data['admin_action'] = 'add_fact'
-    return
-
-# Управление рейтингом
-elif query.data == "admin_rating" and is_admin(user_id):
-    query.edit_message_text(
-        "📊 Введите ID пользователя и количество баллов рейтинга:\n\n"
-        "Формат: `ID баллы`\n"
-        "Пример: `123456789 50`",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("🔙 Отмена", callback_data="admin_menu")
-        ]])
-    )
-    context.user_data['admin_action'] = 'add_rating'
-    return
-
-# Слежка
-elif query.data == "admin_tracking" and is_admin(user_id):
-    enabled = is_tracking_enabled()
-    status = "✅ ВКЛЮЧЕНА" if enabled else "❌ ВЫКЛЮЧЕНА"
-    keyboard = [
-        [InlineKeyboardButton("✅ Включить" if not enabled else "❌ Выключить", callback_data="toggle_tracking")],
-        [InlineKeyboardButton("🔙 Назад", callback_data="admin_menu")],
-    ]
-    query.edit_message_text(
-        f"👁️ **Настройка слежки**\n\n"
-        f"Текущий статус: {status}\n\n"
-        f"Когда слежка включена, администраторы видят, кто отправил фото.",
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-    return
-
-# Переключение слежки
-elif query.data == "toggle_tracking" and is_admin(user_id):
-    enabled = is_tracking_enabled()
-    set_tracking(not enabled)
-    new_status = "✅ ВКЛЮЧЕНА" if not enabled else "❌ ВЫКЛЮЧЕНА"
-    query.edit_message_text(
-        f"👁️ Статус слежки изменен на: {new_status}",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("🔙 Назад", callback_data="admin_tracking")
-        ]])
-    )
-    return
-    
-    # Статистика
-    elif query.data == "admin_stats" and is_admin(user_id):
-        def _get_stats():
+    # Подписка
+    if query.data == "menu_subscription":
+        if has_subscription(user_id):
             conn = sqlite3.connect(DB_PATH)
             c = conn.cursor()
-            
-            c.execute("SELECT COUNT(*) FROM photos WHERE status='approved'")
-            photos = c.fetchone()[0]
-            
-            c.execute("SELECT COUNT(*) FROM photos WHERE status='pending'")
-            pending = c.fetchone()[0]
-            
-            c.execute("SELECT COUNT(*) FROM users")
-            users = c.fetchone()[0]
-            
-            c.execute("SELECT COUNT(*) FROM users WHERE subscription_end > datetime('now')")
-            subs = c.fetchone()[0]
-            
-            c.execute("SELECT COUNT(*) FROM reports WHERE status='new'")
-            reports = c.fetchone()[0]
-            
-            c.execute("SELECT COUNT(*) FROM admins")
-            admins = c.fetchone()[0] + len(ADMIN_IDS)
-            
-            c.execute("SELECT COUNT(*) FROM daily_facts")
-            facts = c.fetchone()[0]
-            
-            c.execute("SELECT COUNT(*) FROM polls WHERE is_active=1")
-            polls = c.fetchone()[0]
-            
+            c.execute("SELECT subscription_end FROM users WHERE user_id = ?", (user_id,))
+            end_date = c.fetchone()[0]
             conn.close()
             
-            return (photos, pending, users, subs, reports, admins, facts, polls)
+            text = f"⭐ **У вас активна подписка!**\n\nДействует до: {end_date}\n\nДоступно:\n✅ Решенное домашнее задание"
+            keyboard = [
+                [InlineKeyboardButton("✅ Решенное ДЗ", callback_data="menu_solved_hw")],
+                [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
+            ]
+        else:
+            text = (f"⭐ **Подписка за {STAR_PRICE} звёзд**\n\n"
+                    f"Что дает подписка:\n"
+                    f"✅ Доступ к решенному домашнему заданию\n"
+                    f"✅ Приоритетная поддержка\n"
+                    f"✅ +10 баллов к рейтингу за фото\n\n"
+                    f"Как оплатить:\n"
+                    f"1. Нажмите кнопку 'Оплатить звёздами'\n"
+                    f"2. Подтвердите платеж\n"
+                    f"3. Получите доступ!")
+            keyboard = [
+                [InlineKeyboardButton(f"⭐ Оплатить {STAR_PRICE} звёзд", callback_data="pay_subscription")],
+                [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
+            ]
         
-        photos, pending, users, subs, reports, admins, facts, polls = _get_stats()
-        
-        text = (
-            f"📊 **Статистика бота:**\n\n"
-            f"👥 Всего пользователей: {users}\n"
-            f"⭐ Подписчиков: {subs}\n"
-            f"📸 Фото в галерее: {photos}\n"
-            f"⏳ На модерации: {pending}\n"
-            f"👑 Администраторов: {admins}\n"
-            f"📞 Новых сообщений: {reports}\n"
-            f"🎯 Интересных фактов: {facts}\n"
-            f"📊 Активных опросов: {polls}"
+        query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+    
+    # Оплата подписки
+    if query.data == "pay_subscription":
+        query.edit_message_text(
+            f"⭐ Для оплаты подписки отправьте {STAR_PRICE} звёзд этому боту.\n\n"
+            f"Инструкция:\n"
+            f"1. Нажмите на скрепку 📎\n"
+            f"2. Выберите 💎 'Звёзды'\n"
+            f"3. Укажите количество: {STAR_PRICE}\n"
+            f"4. Отправьте и подписка активируется!\n\n"
+            f"Или попросите администратора выдать подписку.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Назад", callback_data="menu_subscription")
+            ]])
         )
+        return
+    
+    # Связь с админом
+    if query.data == "menu_support":
+        query.edit_message_text(
+            "📞 Напишите ваше сообщение для администратора.\n\nОпишите проблему или задайте вопрос — мы ответим как можно скорее!",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
+            ]])
+        )
+        context.user_data['waiting_for_support'] = True
+        return
+    
+    # Рейтинг
+    if query.data == "menu_rating":
+        rating, photos = get_user_rating(user_id)
+        top_users = get_top_users(5)
+        
+        text = f"📊 **Ваш профиль**\n\n⭐ Рейтинг: {rating}\n📸 Одобренных фото: {photos}\n\n"
+        
+        if top_users:
+            text += "🏆 **Топ пользователей:**\n"
+            for i, (uid, uname, fname, rate, pcount) in enumerate(top_users, 1):
+                name = uname or fname or f"ID{uid}"
+                text += f"{i}. {name} — {rate} ⭐\n"
+        
+        query.edit_message_text(text, parse_mode="Markdown",
+                              reply_markup=InlineKeyboardMarkup([[
+                                  InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
+                              ]]))
+        return
+    
+    # Факт
+    if query.data == "menu_fact":
+        fact_info = get_random_fact()
+        if fact_info:
+            fact, category = fact_info
+            text = f"🎯 **Интересный факт**\n\n{fact}\n\n📚 Категория: {category}"
+        else:
+            text = "🎯 Факты пока не добавлены. Администраторы скоро добавят!"
+        
+        keyboard = [
+            [InlineKeyboardButton("🔄 Ещё факт", callback_data="menu_fact")],
+            [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
+        ]
+        query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+    
+    # Админ-меню
+    if query.data == "admin_menu" and is_admin(user_id):
+        keyboard = [
+            [InlineKeyboardButton("📝 Изменить ДЗ", callback_data="admin_hw")],
+            [InlineKeyboardButton("✅ Добавить решенное ДЗ", callback_data="admin_solved_hw")],
+            [InlineKeyboardButton("📸 Модерация фото", callback_data="admin_moderate")],
+            [InlineKeyboardButton("➕ Добавить админа", callback_data="admin_add")],
+            [InlineKeyboardButton("❌ Удалить админа", callback_data="admin_remove")],
+            [InlineKeyboardButton("🚫 Бан пользователя", callback_data="admin_ban")],
+            [InlineKeyboardButton("✅ Разбан пользователя", callback_data="admin_unban")],
+            [InlineKeyboardButton("⭐ Выдать подписку", callback_data="admin_subscription")],
+            [InlineKeyboardButton("📢 Рассылка", callback_data="admin_broadcast")],
+            [InlineKeyboardButton("📊 Статистика", callback_data="admin_stats")],
+            [InlineKeyboardButton("📞 Сообщения в поддержку", callback_data="admin_reports")],
+            [InlineKeyboardButton("👁️ Слежка", callback_data="admin_tracking")],
+            [InlineKeyboardButton("➕ Добавить факт", callback_data="admin_add_fact")],
+            [InlineKeyboardButton("📊 Управление рейтингом", callback_data="admin_rating")],
+            [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")],
+        ]
+        query.edit_message_text("👑 **Админ-панель**", parse_mode="Markdown", 
+                              reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+    
+    # Модерация фото
+    if query.data == "admin_moderate" and is_admin(user_id):
+        pending = get_pending_photos()
+        if not pending:
+            query.edit_message_text(
+                "📸 Нет фото на модерации.",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Назад", callback_data="admin_menu")
+                ]])
+            )
+            return
+        
+        context.user_data['pending_photos'] = pending
+        context.user_data['pending_index'] = 0
+        show_pending_photo(query, context, 0)
+        return
+    
+    # Одобрить фото
+    if query.data.startswith("approve_photo_") and is_admin(user_id):
+        photo_id = int(query.data.split("_")[2])
+        approve_photo(photo_id, user_id)
+        
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        c.execute("SELECT user_id FROM photos WHERE id=?", (photo_id,))
+        photo_user = c.fetchone()
+        conn.close()
+        
+        if photo_user:
+            add_user_rating(photo_user[0], 10)
+        
+        if 'pending_photos' in context.user_data:
+            pending = context.user_data['pending_photos']
+            index = context.user_data.get('pending_index', 0) + 1
+            if index < len(pending):
+                show_pending_photo(query, context, index)
+            else:
+                query.edit_message_text(
+                    "✅ Все фото обработаны!",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("🔙 Назад", callback_data="admin_menu")
+                    ]])
+                )
+                context.user_data.pop('pending_photos', None)
+                context.user_data.pop('pending_index', None)
+        return
+    
+    # Отклонить фото
+    if query.data.startswith("reject_photo_") and is_admin(user_id):
+        photo_id = int(query.data.split("_")[2])
+        reject_photo(photo_id, user_id)
+        
+        if 'pending_photos' in context.user_data:
+            pending = context.user_data['pending_photos']
+            index = context.user_data.get('pending_index', 0) + 1
+            if index < len(pending):
+                show_pending_photo(query, context, index)
+            else:
+                query.edit_message_text(
+                    "✅ Все фото обработаны!",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("🔙 Назад", callback_data="admin_menu")
+                    ]])
+                )
+                context.user_data.pop('pending_photos', None)
+                context.user_data.pop('pending_index', None)
+        return
+    
+    # Добавить факт
+    if query.data == "admin_add_fact" and is_admin(user_id):
+        query.edit_message_text(
+            "📝 Введите факт в формате:\n`Категория: Факт`\n\nПример: `Наука: Вода кипит при 100°C`",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Отмена", callback_data="admin_menu")
+            ]])
+        )
+        context.user_data['admin_action'] = 'add_fact'
+        return
+    
+    # Управление рейтингом
+    if query.data == "admin_rating" and is_admin(user_id):
+        query.edit_message_text(
+            "📊 Введите ID пользователя и количество баллов рейтинга:\n\nФормат: `ID баллы`\nПример: `123456789 50`",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Отмена", callback_data="admin_menu")
+            ]])
+        )
+        context.user_data['admin_action'] = 'add_rating'
+        return
+    
+    # Слежка
+    if query.data == "admin_tracking" and is_admin(user_id):
+        enabled = is_tracking_enabled()
+        status = "✅ ВКЛЮЧЕНА" if enabled else "❌ ВЫКЛЮЧЕНА"
+        keyboard = [
+            [InlineKeyboardButton("✅ Включить" if not enabled else "❌ Выключить", callback_data="toggle_tracking")],
+            [InlineKeyboardButton("🔙 Назад", callback_data="admin_menu")],
+        ]
+        query.edit_message_text(
+            f"👁️ **Настройка слежки**\n\nТекущий статус: {status}\n\nКогда слежка включена, администраторы видят, кто отправил фото.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+        return
+    
+    # Переключение слежки
+    if query.data == "toggle_tracking" and is_admin(user_id):
+        enabled = is_tracking_enabled()
+        set_tracking(not enabled)
+        new_status = "✅ ВКЛЮЧЕНА" if not enabled else "❌ ВЫКЛЮЧЕНА"
+        query.edit_message_text(
+            f"👁️ Статус слежки изменен на: {new_status}",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Назад", callback_data="admin_tracking")
+            ]])
+        )
+        return
+    
+    # Статистика
+    if query.data == "admin_stats" and is_admin(user_id):
+        conn = sqlite3.connect(DB_PATH)
+        c = conn.cursor()
+        
+        c.execute("SELECT COUNT(*) FROM photos WHERE status='approved'")
+        photos = c.fetchone()[0]
+        
+        c.execute("SELECT COUNT(*) FROM photos WHERE status='pending'")
+        pending = c.fetchone()[0]
+        
+        c.execute("SELECT COUNT(*) FROM users")
+        users = c.fetchone()[0]
+        
+        c.execute("SELECT COUNT(*) FROM users WHERE subscription_end > datetime('now')")
+        subs = c.fetchone()[0]
+        
+        c.execute("SELECT COUNT(*) FROM reports WHERE status='new'")
+        reports = c.fetchone()[0]
+        
+        c.execute("SELECT COUNT(*) FROM admins")
+        admins = c.fetchone()[0] + len(ADMIN_IDS)
+        
+        c.execute("SELECT COUNT(*) FROM daily_facts")
+        facts = c.fetchone()[0]
+        
+        conn.close()
+        
+        text = (f"📊 **Статистика бота:**\n\n"
+                f"👥 Всего пользователей: {users}\n"
+                f"⭐ Подписчиков: {subs}\n"
+                f"📸 Фото в галерее: {photos}\n"
+                f"⏳ На модерации: {pending}\n"
+                f"👑 Администраторов: {admins}\n"
+                f"📞 Новых сообщений: {reports}\n"
+                f"🎯 Интересных фактов: {facts}")
         
         query.edit_message_text(text, parse_mode="Markdown",
                               reply_markup=InlineKeyboardMarkup([[
@@ -1108,7 +876,7 @@ elif query.data == "toggle_tracking" and is_admin(user_id):
         return
     
     # Сообщения в поддержку
-    elif query.data == "admin_reports" and is_admin(user_id):
+    if query.data == "admin_reports" and is_admin(user_id):
         reports = get_new_reports()
         
         if not reports:
@@ -1122,8 +890,8 @@ elif query.data == "toggle_tracking" and is_admin(user_id):
         
         text = "📞 **Новые сообщения:**\n\n"
         for report in reports[:5]:
-            report_id, user_id, username, message, date = report
-            text += f"ID: {report_id}\nОт: @{username or 'Неизвестно'} (ID: {user_id})\nДата: {date}\nСообщение: {message}\n\n"
+            report_id, uid, username, message, date = report
+            text += f"ID: {report_id}\nОт: @{username or 'Неизвестно'} (ID: {uid})\nДата: {date}\nСообщение: {message}\n\n"
             mark_report_read(report_id)
         
         text += "\n✅ Сообщения отмечены как прочитанные. Ответьте пользователю в личные сообщения."
@@ -1135,11 +903,9 @@ elif query.data == "toggle_tracking" and is_admin(user_id):
         return
     
     # Рассылка
-    elif query.data == "admin_broadcast" and is_admin(user_id):
+    if query.data == "admin_broadcast" and is_admin(user_id):
         query.edit_message_text(
-            "📢 Введите сообщение для рассылки всем пользователям.\n\n"
-            "Поддерживается обычный текст, эмодзи и Markdown разметка.\n\n"
-            "Пример: *Важное объявление* для всех!",
+            "📢 Введите сообщение для рассылки всем пользователям.\n\nПоддерживается обычный текст, эмодзи и Markdown разметка.",
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("🔙 Отмена", callback_data="admin_menu")
             ]])
@@ -1147,15 +913,13 @@ elif query.data == "toggle_tracking" and is_admin(user_id):
         context.user_data['admin_action'] = 'broadcast'
         return
     
-    # Разделы админ-панели, требующие ввода
+    # Разделы админ-панели с вводом
     if query.data in ["admin_hw", "admin_solved_hw", "admin_add", "admin_remove", 
                       "admin_ban", "admin_unban", "admin_subscription"] and is_admin(user_id):
         
         if query.data == "admin_hw":
             query.edit_message_text(
-                "📝 Введите новое домашнее задание в формате:\n"
-                "`Предмет: Задание`\n\n"
-                "Пример: `Математика: Учебник стр. 45, № 123-125`",
+                "📝 Введите новое домашнее задание в формате:\n`Предмет: Задание`\n\nПример: `Математика: Учебник стр. 45, № 123-125`",
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton("🔙 Отмена", callback_data="admin_menu")
                 ]])
@@ -1163,11 +927,9 @@ elif query.data == "toggle_tracking" and is_admin(user_id):
             context.user_data['admin_action'] = 'hw'
             return
         
-        elif query.data == "admin_solved_hw":
+        if query.data == "admin_solved_hw":
             query.edit_message_text(
-                "✅ Отправьте **несколько фото** решенного домашнего задания.\n\n"
-                "После отправки всех фото нажмите кнопку 'Готово', чтобы указать предмет.\n\n"
-                "📸 Отправляйте фото по одному.",
+                "✅ Отправьте **несколько фото** решенного домашнего задания.\n\nПосле отправки всех фото нажмите кнопку 'Готово', чтобы указать предмет.",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("✅ Готово (закончить)", callback_data="solved_hw_done")],
                     [InlineKeyboardButton("🔙 Отмена", callback_data="admin_menu")]
@@ -1177,10 +939,9 @@ elif query.data == "toggle_tracking" and is_admin(user_id):
             context.user_data['solved_hw_photos'] = []
             return
         
-        elif query.data == "admin_add":
+        if query.data == "admin_add":
             query.edit_message_text(
-                "➕ Отправьте ID нового администратора.\n\n"
-                "ID можно узнать у @userinfobot",
+                "➕ Отправьте ID нового администратора.\n\nID можно узнать у @userinfobot",
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton("🔙 Отмена", callback_data="admin_menu")
                 ]])
@@ -1188,7 +949,7 @@ elif query.data == "toggle_tracking" and is_admin(user_id):
             context.user_data['admin_action'] = 'add_admin'
             return
         
-        elif query.data == "admin_remove":
+        if query.data == "admin_remove":
             query.edit_message_text(
                 "❌ Отправьте ID администратора, которого хотите удалить.",
                 reply_markup=InlineKeyboardMarkup([[
@@ -1198,13 +959,9 @@ elif query.data == "toggle_tracking" and is_admin(user_id):
             context.user_data['admin_action'] = 'remove_admin'
             return
         
-        elif query.data == "admin_ban":
+        if query.data == "admin_ban":
             query.edit_message_text(
-                "🚫 Отправьте ID пользователя и время бана в часах.\n\n"
-                "Формат: `ID часы`\n"
-                "Пример: `123456789 24` - бан на 24 часа\n"
-                "Если часы не указать - бан навсегда\n"
-                "Пример: `123456789` - бан навсегда",
+                "🚫 Отправьте ID пользователя и время бана в часах.\n\nФормат: `ID часы`\nПример: `123456789 24` - бан на 24 часа\nЕсли часы не указать - бан навсегда",
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton("🔙 Отмена", callback_data="admin_menu")
                 ]])
@@ -1212,7 +969,7 @@ elif query.data == "toggle_tracking" and is_admin(user_id):
             context.user_data['admin_action'] = 'ban'
             return
         
-        elif query.data == "admin_unban":
+        if query.data == "admin_unban":
             query.edit_message_text(
                 "✅ Отправьте ID пользователя для разбана.",
                 reply_markup=InlineKeyboardMarkup([[
@@ -1222,12 +979,9 @@ elif query.data == "toggle_tracking" and is_admin(user_id):
             context.user_data['admin_action'] = 'unban'
             return
         
-        elif query.data == "admin_subscription":
+        if query.data == "admin_subscription":
             query.edit_message_text(
-                "⭐ Отправьте ID пользователя и количество дней подписки.\n\n"
-                "Формат: `ID дни`\n"
-                "Пример: `123456789 30` - подписка на 30 дней\n"
-                "Если дни не указать - подписка на 30 дней по умолчанию",
+                "⭐ Отправьте ID пользователя и количество дней подписки.\n\nФормат: `ID дни`\nПример: `123456789 30` - подписка на 30 дней",
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton("🔙 Отмена", callback_data="admin_menu")
                 ]])
@@ -1235,8 +989,8 @@ elif query.data == "toggle_tracking" and is_admin(user_id):
             context.user_data['admin_action'] = 'subscription'
             return
     
-    # Завершение добавления фото для решенного ДЗ
-    elif query.data == "solved_hw_done" and is_admin(user_id):
+    # Завершение добавления фото
+    if query.data == "solved_hw_done" and is_admin(user_id):
         if context.user_data.get('solved_hw_photos'):
             query.edit_message_text(
                 "📝 Напишите название предмета для этих фото:",
@@ -1262,9 +1016,7 @@ def show_pending_photo(query, context, index):
     photo_id, file_id, user_id, username, date = pending[index]
     context.user_data['pending_index'] = index
     
-    caption = f"📸 Фото {index+1}/{len(pending)}\n"
-    caption += f"От: @{username or 'Неизвестно'} (ID: {user_id})\n"
-    caption += f"Дата: {date}"
+    caption = f"📸 Фото {index+1}/{len(pending)}\nОт: @{username or 'Неизвестно'} (ID: {user_id})\nДата: {date}"
     
     keyboard = InlineKeyboardMarkup([
         [
@@ -1276,6 +1028,7 @@ def show_pending_photo(query, context, index):
     
     query.message.reply_photo(photo=file_id, caption=caption, reply_markup=keyboard)
     query.message.delete()
+
 # ================== ОБРАБОТЧИКИ СООБЩЕНИЙ ==================
 @not_banned
 def handle_photo(update: Update, context: CallbackContext):
@@ -1290,8 +1043,7 @@ def handle_photo(update: Update, context: CallbackContext):
         
         count = len(context.user_data['solved_hw_photos'])
         update.message.reply_text(
-            f"✅ Фото {count} добавлено для решенного ДЗ!\n"
-            f"Отправьте еще фото или нажмите кнопку 'Готово'.",
+            f"✅ Фото {count} добавлено для решенного ДЗ!\nОтправьте еще фото или нажмите кнопку 'Готово'.",
             reply_markup=InlineKeyboardMarkup([
                 [InlineKeyboardButton("✅ Готово (закончить)", callback_data="solved_hw_done")],
                 [InlineKeyboardButton("🔙 Отмена", callback_data="admin_menu")]
@@ -1306,15 +1058,13 @@ def handle_photo(update: Update, context: CallbackContext):
             try:
                 context.bot.send_message(
                     chat_id=admin_id,
-                    text=f"📸 Новое фото на модерацию от @{user.username or user.first_name} (ID: {user.id})\n"
-                         f"ID фото: {photo_id}"
+                    text=f"📸 Новое фото на модерацию от @{user.username or user.first_name} (ID: {user.id})\nID фото: {photo_id}"
                 )
             except:
                 pass
     
     update.message.reply_text(
-        f"✅ Фото отправлено на модерацию!\n"
-        f"Оно появится в галерее после проверки администратором.",
+        f"✅ Фото отправлено на модерацию!\nОно появится в галерее после проверки администратором.",
         reply_markup=InlineKeyboardMarkup([[
             InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")
         ]])
@@ -1395,10 +1145,7 @@ def handle_text(update: Update, context: CallbackContext):
                 context.user_data['admin_action'] = None
                 
                 try:
-                    context.bot.send_message(
-                        chat_id=admin_id,
-                        text="🎉 Вас назначили администратором бота 'Помощник 9Г'!"
-                    )
+                    context.bot.send_message(chat_id=admin_id, text="🎉 Вас назначили администратором бота 'Помощник 9Г'!")
                 except:
                     pass
             except ValueError:
@@ -1429,23 +1176,19 @@ def handle_text(update: Update, context: CallbackContext):
                 
                 if hours:
                     ban_user(user_id, hours)
-                    update.message.reply_text(
-                        f"✅ Пользователь {user_id} забанен на {hours} часов",
-                        reply_markup=InlineKeyboardMarkup([[
-                            InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")
-                        ]])
-                    )
+                    update.message.reply_text(f"✅ Пользователь {user_id} забанен на {hours} часов")
                 else:
                     ban_user(user_id)
-                    update.message.reply_text(
-                        f"✅ Пользователь {user_id} забанен навсегда",
-                        reply_markup=InlineKeyboardMarkup([[
-                            InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")
-                        ]])
-                    )
+                    update.message.reply_text(f"✅ Пользователь {user_id} забанен навсегда")
                 
+                update.message.reply_text(
+                    "Готово!",
+                    reply_markup=InlineKeyboardMarkup([[
+                        InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")
+                    ]])
+                )
                 context.user_data['admin_action'] = None
-            except Exception as e:
+            except:
                 update.message.reply_text("❌ Неверный формат. Используйте: `ID часы` или просто `ID`")
         
         elif action == 'unban':
@@ -1484,48 +1227,36 @@ def handle_text(update: Update, context: CallbackContext):
                     )
                 except:
                     pass
-            except Exception as e:
+            except:
                 update.message.reply_text("❌ Неверный формат. Используйте: `ID дни`")
         
         elif action == 'broadcast':
-            context.user_data['broadcast_message'] = text
             users = get_all_users()
-            
-            update.message.reply_text(
-                f"📢 Начинаю рассылку {len(users)} пользователям...\n"
-                f"Это может занять некоторое время.",
-                reply_markup=InlineKeyboardMarkup([[
-                    InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")
-                ]])
-            )
+            update.message.reply_text(f"📢 Начинаю рассылку {len(users)} пользователям...")
             
             success = 0
             failed = 0
             
-            for user_id in users:
+            for uid in users:
                 try:
                     context.bot.send_message(
-                        chat_id=user_id,
+                        chat_id=uid,
                         text=f"📢 **Сообщение от администрации:**\n\n{text}",
                         parse_mode="Markdown"
                     )
                     success += 1
                 except:
                     failed += 1
-                
                 time.sleep(0.05)
             
             save_broadcast(user.id, text)
             
             update.message.reply_text(
-                f"✅ Рассылка завершена!\n"
-                f"📨 Успешно: {success}\n"
-                f"❌ Не удалось: {failed}",
+                f"✅ Рассылка завершена!\n📨 Успешно: {success}\n❌ Не удалось: {failed}",
                 reply_markup=InlineKeyboardMarkup([[
                     InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")
                 ]])
             )
-            
             context.user_data['admin_action'] = None
         
         elif action == 'add_fact':
@@ -1562,24 +1293,21 @@ def handle_text(update: Update, context: CallbackContext):
 # ================== ОБРАБОТЧИК ЗВЁЗД ==================
 def handle_stars(update: Update, context: CallbackContext):
     user = update.effective_user
-    
     if update.message.successful_payment:
         give_subscription(user.id, 30)
         add_user_rating(user.id, 100)
         update.message.reply_text(
-            "⭐ Спасибо за покупку! Подписка активирована на 30 дней.\n"
-            "Вам начислено 100 баллов рейтинга!\n"
-            "Теперь вам доступно решенное домашнее задание!",
+            "⭐ Спасибо за покупку! Подписка активирована на 30 дней.\nВам начислено 100 баллов рейтинга!",
             reply_markup=InlineKeyboardMarkup([[
                 InlineKeyboardButton("✅ Решенное ДЗ", callback_data="menu_solved_hw"),
                 InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")
             ]])
         )
 
-# ================== ЗАПУСК БОТА ==================
+# ================== ЗАПУСК ==================
 def main():
     init_db()
-    add_background_task(cleanup_old_data)
+    cleanup_old_data()
     
     updater = Updater(TOKEN, use_context=True)
     dp = updater.dispatcher
@@ -1592,8 +1320,6 @@ def main():
     
     print("🚀 Бот 'Помощник 9Г' запущен...")
     print(f"👑 Главный администратор ID: {ADMIN_IDS[0]}")
-    print(f"📸 Фото удаляются через {PHOTO_EXPIRE_DAYS} дней")
-    print(f"⚡ Кэш включен, TTL: {CACHE_TTL} сек")
     
     updater.start_polling()
     updater.idle()
