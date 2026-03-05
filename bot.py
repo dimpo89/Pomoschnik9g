@@ -795,71 +795,135 @@ def button_handler(update: Update, context: CallbackContext):
             )
         return
     
-# Отправить фото
-elif query.data == "menu_photo":
-    query.edit_message_text(
-        "📸 Отправьте мне фото, и оно будет отправлено на модерацию.\n\n"
-        "После проверки администратором фото появится в галерее.",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
-        ]])
-    )
-    return
-
-# Отправить фото
-elif query.data == "menu_photo":
-    query.edit_message_text(
-        "📸 Отправьте мне фото, и оно будет отправлено на модерацию.\n\n"
-        "После проверки администратором фото появится в галерее.",
-        reply_markup=InlineKeyboardMarkup([[
-            InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
-        ]])
-    )
-    return
-
-# Случайное фото
-elif query.data == "menu_random":
-    photo_id = get_random_photo()
-    if photo_id:
-        count = get_photos_count()
-        caption = f"🎲 Случайное фото из галереи\nВсего фотографий: {count}"
+def button_handler(update: Update, context: CallbackContext):
+    query = update.callback_query
+    query.answer()
+    user_id = query.from_user.id
+    
+    if is_banned(user_id):
+        query.edit_message_text("⛔ Вы забанены и не можете использовать бота.")
+        return
+    
+    # Главное меню
+    if query.data == "main_menu":
+        query.edit_message_text("🏠 Главное меню:", reply_markup=get_main_menu_keyboard(user_id))
+        return
+    
+    # Домашнее задание
+    elif query.data == "menu_hw":
+        hw = get_homework()
         
-        # Показываем, кто отправил, если слежка включена и пользователь админ
-        if is_tracking_enabled() and is_admin(user_id):
-            conn = sqlite3.connect(DB_PATH)
-            c = conn.cursor()
-            c.execute("SELECT username, user_id, date FROM photos WHERE file_id = ?", (photo_id,))
-            photo_info = c.fetchone()
-            conn.close()
+        if hw:
+            text = f"📚 **Домашнее задание:**\n\n**Предмет:** {hw[0]}\n**Задание:** {hw[1]}"
+        else:
+            text = "📚 Домашнее задание пока не добавлено."
+        
+        keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]]
+        
+        # Если есть подписка, показываем кнопку с решенным ДЗ
+        if has_subscription(user_id):
+            keyboard.insert(0, [InlineKeyboardButton("✅ Решенное ДЗ", callback_data="menu_solved_hw")])
+        
+        query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+        return
+    
+    # Решенное ДЗ (для подписчиков)
+    elif query.data == "menu_solved_hw":
+        if not has_subscription(user_id):
+            keyboard = [
+                [InlineKeyboardButton("⭐ Купить подписку", callback_data="menu_subscription")],
+                [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
+            ]
+            query.edit_message_text(
+                "❌ У вас нет подписки!\n\n"
+                "Купите подписку за 50 ⭐ или попросите администратора выдать её.",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+            return
+        
+        subject, photo_ids = get_solved_homework()
+        if photo_ids:
+            query.edit_message_text(f"✅ Решенное домашнее задание\nПредмет: {subject}\n\nЗагружаю фото...")
             
-            if photo_info:
-                username, photo_user_id, date = photo_info
-                caption += f"\n\n👤 Отправил: @{username or 'Неизвестно'} (ID: {photo_user_id})\n📅 Дата: {date}"
-        
-        # Используем reply_photo с правильной клавиатурой
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🔄 Ещё", callback_data="menu_random"),
-            InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
-        ]])
-        
-        query.message.reply_photo(
-            photo=photo_id,
-            caption=caption,
-            reply_markup=keyboard
-        )
-        query.message.delete()
-    else:
-        keyboard = InlineKeyboardMarkup([[
-            InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
-        ]])
+            # Отправляем все фото
+            for i, photo_id in enumerate(photo_ids, 1):
+                caption = f"✅ Решенное ДЗ - {subject} (фото {i}/{len(photo_ids)})" if len(photo_ids) > 1 else f"✅ Решенное ДЗ - {subject}"
+                query.message.reply_photo(
+                    photo=photo_id,
+                    caption=caption
+                )
+            
+            # Отправляем кнопку возврата
+            query.message.reply_text(
+                "Выберите действие:",
+                reply_markup=InlineKeyboardMarkup([[
+                    InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
+                ]])
+            )
+            query.message.delete()
+        else:
+            keyboard = [[InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]]
+            query.edit_message_text(
+                "📝 Решенное домашнее задание пока не добавлено.",
+                reply_markup=InlineKeyboardMarkup(keyboard)
+            )
+        return
+    
+    # Отправить фото
+    elif query.data == "menu_photo":
         query.edit_message_text(
-            "📸 В галерее пока нет фотографий. Отправь своё фото!",
-            reply_markup=keyboard
+            "📸 Отправьте мне фото, и оно будет отправлено на модерацию.\n\n"
+            "После проверки администратором фото появится в галерее.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
+            ]])
         )
-    return
-
-# Подписка
+        return
+    
+    # Случайное фото
+    elif query.data == "menu_random":
+        photo_id = get_random_photo()
+        if photo_id:
+            count = get_photos_count()
+            caption = f"🎲 Случайное фото из галереи\nВсего фотографий: {count}"
+            
+            # Показываем, кто отправил, если слежка включена и пользователь админ
+            if is_tracking_enabled() and is_admin(user_id):
+                conn = sqlite3.connect(DB_PATH)
+                c = conn.cursor()
+                c.execute("SELECT username, user_id, date FROM photos WHERE file_id = ?", (photo_id,))
+                photo_info = c.fetchone()
+                conn.close()
+                
+                if photo_info:
+                    username, photo_user_id, date = photo_info
+                    caption += f"\n\n👤 Отправил: @{username or 'Неизвестно'} (ID: {photo_user_id})\n📅 Дата: {date}"
+            
+            # Используем reply_photo с правильной клавиатурой
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔄 Ещё", callback_data="menu_random"),
+                InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
+            ]])
+            
+            query.message.reply_photo(
+                photo=photo_id,
+                caption=caption,
+                reply_markup=keyboard
+            )
+            query.message.delete()
+        else:
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Назад", callback_data="main_menu")
+            ]])
+            query.edit_message_text(
+                "📸 В галерее пока нет фотографий. Отправь своё фото!",
+                reply_markup=keyboard
+            )
+        return
+    
+    # Подписка
 elif query.data == "menu_subscription":
+        # ... остальной код ...
     if has_subscription(user_id):
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
