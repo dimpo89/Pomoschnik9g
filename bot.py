@@ -41,7 +41,7 @@ def init_db():
                   subject TEXT,
                   photo_ids TEXT,
                   date TEXT,
-                  expires_at TEXT)''')  #-- Дата истечения
+                  expires_at TEXT)''') 
     
     # Таблица с фотографиями
     c.execute('''CREATE TABLE IF NOT EXISTS photos
@@ -561,21 +561,6 @@ def button_handler(update: Update, context: CallbackContext):
                 [InlineKeyboardButton(f"⭐ Оплатить {STAR_PRICE} звёзд", callback_data="pay_subscription")],
                 [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
             ]
-        else:
-            text = (
-                f"⭐ **Подписка за {STAR_PRICE} звёзд**\n\n"
-                f"Что дает подписка:\n"
-                f"✅ Доступ к решенному домашнему заданию\n"
-                f"✅ Приоритетная поддержка\n\n"
-                f"Как оплатить:\n"
-                f"1. Нажмите кнопку 'Оплатить звёздами'\n"
-                f"2. Подтвердите платеж\n"
-                f"3. Получите доступ!"
-            )
-            keyboard = [
-                [InlineKeyboardButton(f"⭐ Оплатить {STAR_PRICE} звёзд", callback_data="pay_subscription")],
-                [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
-            ]
         
         query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
     
@@ -727,7 +712,7 @@ def button_handler(update: Update, context: CallbackContext):
         context.user_data['admin_action'] = 'broadcast'
     
     # Разделы админ-панели, требующие ввода
-    elif query.data in ["admin_hw", "admin_solved_hw", "admin_add", "admin_remove", 
+    if query.data in ["admin_hw", "admin_solved_hw", "admin_add", "admin_remove", 
                        "admin_ban", "admin_unban", "admin_subscription"] and is_admin(user_id):
         
         if query.data == "admin_hw":
@@ -1000,7 +985,7 @@ def handle_text(update: Update, context: CallbackContext):
                     )
                 
                 context.user_data['admin_action'] = None
-            except:
+            except Exception as e:
                 update.message.reply_text("❌ Неверный формат. Используйте: `ID часы` или просто `ID`")
         
         elif action == 'unban':
@@ -1015,4 +1000,11 @@ def handle_text(update: Update, context: CallbackContext):
                 )
                 context.user_data['admin_action'] = None
             except ValueError:
-              
+                update.message.reply_text("❌ Введите числовой ID")
+        
+        elif action == 'subscription':
+            parts = text.strip().split()
+            try:
+                user_id = int(parts[0])
+                days = int(parts[1]) if len(parts) > 1 else 30
+                
