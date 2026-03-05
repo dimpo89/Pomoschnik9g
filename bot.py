@@ -1267,20 +1267,99 @@ def button_handler(update: Update, context: CallbackContext):
                 InlineKeyboardButton("🔙 Отмена", callback_data="admin_menu")
             ]])
         )
-        context.user_data['admin_action'] = 'broadcast'
+    context.user_data['admin_action'] = 'broadcast'
+    return
+
+# Разделы админ-панели, требующие ввода
+elif query.data in ["admin_hw", "admin_solved_hw", "admin_add", "admin_remove", 
+                   "admin_ban", "admin_unban", "admin_subscription"] and is_admin(user_id):
+    
+    if query.data == "admin_hw":
+        query.edit_message_text(
+            "📝 Введите новое домашнее задание в формате:\n"
+            "`Предмет: Задание`\n\n"
+            "Пример: `Математика: Учебник стр. 45, № 123-125`",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Отмена", callback_data="admin_menu")
+            ]])
+        )
+        context.user_data['admin_action'] = 'hw'
         return
     
-    # Разделы админ-панели, требующие ввода
-    elif query.data in ["admin_hw", "admin_solved_hw", "admin_add", "admin_remove", 
-                       "admin_ban", "admin_unban", "admin_subscription"] and is_admin(user_id):
-        
-        if query.data == "admin_hw":
-            query.edit_message_text(
-     
+    elif query.data == "admin_solved_hw":
+        query.edit_message_text(
+            "✅ Отправьте **несколько фото** решенного домашнего задания.\n\n"
+            "После отправки всех фото нажмите кнопку 'Готово', чтобы указать предмет.\n\n"
+            "📸 Отправляйте фото по одному.",
+            reply_markup=InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅ Готово (закончить)", callback_data="solved_hw_done")],
+                [InlineKeyboardButton("🔙 Отмена", callback_data="admin_menu")]
+            ])
+        )
+        context.user_data['admin_action'] = 'solved_hw_waiting_photos'
+        context.user_data['solved_hw_photos'] = []
+        return
     
-    # Подписка
+    elif query.data == "admin_add":
+        query.edit_message_text(
+            "➕ Отправьте ID нового администратора.\n\n"
+            "ID можно узнать у @userinfobot",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Отмена", callback_data="admin_menu")
+            ]])
+        )
+        context.user_data['admin_action'] = 'add_admin'
+        return
+    
+    elif query.data == "admin_remove":
+        query.edit_message_text(
+            "❌ Отправьте ID администратора, которого хотите удалить.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Отмена", callback_data="admin_menu")
+            ]])
+        )
+        context.user_data['admin_action'] = 'remove_admin'
+        return
+    
+    elif query.data == "admin_ban":
+        query.edit_message_text(
+            "🚫 Отправьте ID пользователя и время бана в часах.\n\n"
+            "Формат: `ID часы`\n"
+            "Пример: `123456789 24` - бан на 24 часа\n"
+            "Если часы не указать - бан навсегда\n"
+            "Пример: `123456789` - бан навсегда",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Отмена", callback_data="admin_menu")
+            ]])
+        )
+        context.user_data['admin_action'] = 'ban'
+        return
+    
+    elif query.data == "admin_unban":
+        query.edit_message_text(
+            "✅ Отправьте ID пользователя для разбана.",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Отмена", callback_data="admin_menu")
+            ]])
+        )
+        context.user_data['admin_action'] = 'unban'
+        return
+    
+    elif query.data == "admin_subscription":
+        query.edit_message_text(
+            "⭐ Отправьте ID пользователя и количество дней подписки.\n\n"
+            "Формат: `ID дни`\n"
+            "Пример: `123456789 30` - подписка на 30 дней\n"
+            "Если дни не указать - подписка на 30 дней по умолчанию",
+            reply_markup=InlineKeyboardMarkup([[
+                InlineKeyboardButton("🔙 Отмена", callback_data="admin_menu")
+            ]])
+        )
+        context.user_data['admin_action'] = 'subscription'
+        return
+
+# Подписка
 elif query.data == "menu_subscription":
-        # ... остальной код ...
     if has_subscription(user_id):
         conn = sqlite3.connect(DB_PATH)
         c = conn.cursor()
@@ -1298,6 +1377,25 @@ elif query.data == "menu_subscription":
             [InlineKeyboardButton("✅ Решенное ДЗ", callback_data="menu_solved_hw")],
             [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
         ]
+    else:
+        text = (
+            f"⭐ **Подписка за {STAR_PRICE} звёзд**\n\n"
+            f"Что дает подписка:\n"
+            f"✅ Доступ к решенному домашнему заданию\n"
+            f"✅ Приоритетная поддержка\n"
+            f"✅ +10% к рейтингу за фото\n\n"
+            f"Как оплатить:\n"
+            f"1. Нажмите кнопку 'Оплатить звёздами'\n"
+            f"2. Подтвердите платеж\n"
+            f"3. Получите доступ!"
+        )
+        keyboard = [
+            [InlineKeyboardButton(f"⭐ Оплатить {STAR_PRICE} звёзд", callback_data="pay_subscription")],
+            [InlineKeyboardButton("🔙 Назад", callback_data="main_menu")]
+        ]
+    
+    query.edit_message_text(text, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
+    return
     else:
         text = (
             f"⭐ **Подписка за {STAR_PRICE} звёзд**\n\n"
