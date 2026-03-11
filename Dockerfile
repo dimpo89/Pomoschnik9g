@@ -2,12 +2,18 @@ FROM python:3.9-slim
 
 WORKDIR /app
 
-# Копируем requirements и устанавливаем зависимости
+# Устанавливаем только необходимые системные библиотеки
+RUN apt-get update && apt-get install -y \
+    --no-install-recommends \
+    gcc \
+    && rm -rf /var/lib/apt/lists/*
+
+# Копируем только requirements.txt сначала для кэширования
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Копируем код бота
 COPY bot.py .
 
-# Запускаем бота
 CMD ["python", "bot.py"]
